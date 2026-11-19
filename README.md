@@ -6,6 +6,12 @@ Shorten URLs, choose custom endings, manage links, and track clicks.
 
 React + Vite + TypeScript + Bootstrap · FastAPI + PostgreSQL + Alembic
 
+## Architecture
+
+![Cutlink AWS architecture](docs/assets/architecture.gif)
+
+See [architecture and limits](docs/architecture.md) for details.
+
 ## Run locally
 
 ```powershell
