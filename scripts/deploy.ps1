@@ -57,7 +57,10 @@ try {
             $task = Get-AwsJson @('ecs', 'describe-task-definition', '--task-definition', $old.ApplicationTaskArn)
             $previousImage = @($task.taskDefinition.containerDefinitions | Where-Object name -eq 'api')[0].image
             $versions = Get-AwsJson @('s3api', 'list-object-versions', '--bucket', $base.FrontendBucket, '--prefix', 'index.html')
-            $indexVersion = @($versions.Versions | Where-Object { $_.Key -eq 'index.html' -and $_.IsLatest }) | Select-Object -First 1
+            $indexVersion = $null
+            if ($versions.PSObject.Properties.Name -contains 'Versions') {
+                $indexVersion = @($versions.Versions | Where-Object { $_.Key -eq 'index.html' -and $_.IsLatest }) | Select-Object -First 1
+            }
             $previous = @{
                 backendImage = $previousImage; baseStack = $baseName; appStack = $appName
                 region = $Region; appOrigin = $base.SiteUrl
