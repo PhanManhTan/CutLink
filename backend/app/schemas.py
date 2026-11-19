@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import date, datetime
 
@@ -28,9 +29,34 @@ class UserOut(BaseModel):
     email: str
 
 
-class LinkCreate(BaseModel):
+SHORT_CODE_PATTERN = r"[A-Za-z0-9][A-Za-z0-9_-]{2,63}"
+
+
+class LinkFields(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=120)
     target_url: HttpUrl = Field(max_length=4096)
+
+    @field_validator("target_url", mode="before")
+    @classmethod
+    def check_url_input(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            if not re.match(r"^https?://", value, re.IGNORECASE) or any(
+                ord(char) < 32 or ord(char) == 127 for char in value
+            ):
+                raise ValueError("Enter a valid URL starting with http:// or https://")
+        return value
+
+    @field_validator("target_url")
+    @classmethod
+    def check_destination(cls, value):
+        if value is not None:
+            if value.username is not None or value.password is not None:
+                raise ValueError("Destination URLs cannot contain a username or password")
+            if len(str(value)) > 4096:
+                raise ValueError("Destination URL must be at most 4096 characters")
+        return value
 
     @field_validator("name")
     @classmethod
@@ -43,7 +69,23 @@ class LinkCreate(BaseModel):
         return value
 
 
-class LinkPatch(LinkCreate):
+class LinkCreate(LinkFields):
+    custom_code: str | None = None
+
+    @field_validator("custom_code")
+    @classmethod
+    def check_custom_code(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip()
+        if not re.fullmatch(SHORT_CODE_PATTERN, value):
+            raise ValueError(
+                "Use 3–64 letters, numbers, hyphens or underscores; start with a letter or number"
+            )
+        return value
+
+
+class LinkPatch(LinkFields):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     target_url: HttpUrl | None = Field(default=None, max_length=4096)
     enabled: bool | None = None

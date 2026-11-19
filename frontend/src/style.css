@@ -11,6 +11,26 @@
   --lime: #c4ef86;
   --line: #e8ece6;
 }
+.short-code-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.short-code-input > span {
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+.short-code-input input {
+  flex: 1;
+  min-width: 160px;
+}
+.short-code-preview {
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+  margin: 14px 0;
+}
 body {
   margin: 0;
   font-family: inherit;

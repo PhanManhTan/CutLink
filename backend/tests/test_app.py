@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import jwt
+import pytest
 from fastapi.testclient import TestClient
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import func, select
@@ -134,6 +135,150 @@ def test_url_validation(logged_in):
 def test_patch_rejects_null(logged_in, link):
     for field in ["name", "target_url", "enabled"]:
         assert logged_in.patch(f"/api/links/{link['id']}", json={field: None}).status_code == 422
+
+
+@pytest.mark.parametrize("ending", [None, "", "   "])
+def test_empty_custom_ending_is_random(logged_in, ending):
+    response = logged_in.post(
+        "/api/links",
+        json={
+            "name": "Random ending",
+            "target_url": "https://example.com",
+            "custom_code": ending,
+        },
+    )
+    assert response.status_code == 201
+    assert len(response.json()["code"]) == 8
+    assert response.json()["code"].isalnum()
+
+
+@pytest.mark.parametrize("ending", ["my-portfolio", "My_custom-link", "abc", "z" * 64])
+def test_custom_ending_redirect_and_crud(logged_in, ending):
+    response = logged_in.post(
+        "/api/links",
+        json={
+            "name": "Custom ending",
+            "target_url": "https://example.com/custom",
+            "custom_code": ending,
+        },
+    )
+    assert response.status_code == 201
+    link_id = response.json()["id"]
+    assert response.json()["code"] == ending
+    with patch("app.links.record_click.apply_async"):
+        redirect = logged_in.get(f"/r/{ending}", follow_redirects=False)
+        assert redirect.status_code == 302
+        assert redirect.headers["location"] == "https://example.com/custom"
+        assert (
+            logged_in.patch(
+                f"/api/links/{link_id}",
+                json={
+                    "target_url": "https://example.org/changed",
+                },
+            ).status_code
+            == 200
+        )
+        assert logged_in.get(f"/r/{ending}", follow_redirects=False).headers["location"] == (
+            "https://example.org/changed"
+        )
+        assert logged_in.patch(f"/api/links/{link_id}", json={"enabled": False}).status_code == 200
+        assert logged_in.get(f"/r/{ending}").status_code == 404
+        assert logged_in.delete(f"/api/links/{link_id}").status_code == 204
+        assert logged_in.get(f"/r/{ending}").status_code == 404
+
+
+def test_custom_ending_is_unique_across_users(logged_in):
+    body = {"name": "Custom", "target_url": "https://example.com", "custom_code": "my-custom"}
+    assert logged_in.post("/api/links", json=body).status_code == 201
+    assert logged_in.post("/api/links", json=body).status_code == 409
+    with TestClient(app, headers={"Origin": "http://testserver"}) as other:
+        assert (
+            other.post(
+                "/api/auth/register",
+                json={
+                    "email": "other@example.com",
+                    "password": "another-password-123",
+                },
+            ).status_code
+            == 201
+        )
+        assert other.post("/api/links", json=body).status_code == 409
+        # Endings are explicitly case-sensitive, just like existing random codes.
+        assert (
+            other.post("/api/links", json={**body, "custom_code": "My-Custom"}).status_code == 201
+        )
+
+
+@pytest.mark.parametrize(
+    "ending",
+    [
+        "a",
+        "ab",
+        "a" * 65,
+        "my link",
+        "my/link",
+        "?query",
+        "#hash",
+        "_start",
+        "mã-link",
+        "https://example.com",
+    ],
+)
+def test_invalid_custom_endings_are_rejected(logged_in, ending):
+    assert (
+        logged_in.post(
+            "/api/links",
+            json={
+                "name": "Invalid ending",
+                "target_url": "https://example.com",
+                "custom_code": ending,
+            },
+        ).status_code
+        == 422
+    )
+    assert logged_in.get("/api/links").json()["total"] == 0
+
+
+def test_short_code_cannot_be_changed_by_patch(logged_in, link):
+    for field in ["code", "custom_code"]:
+        assert (
+            logged_in.patch(f"/api/links/{link['id']}", json={field: "new-ending"}).status_code
+            == 422
+        )
+    assert logged_in.get(f"/api/links/{link['id']}").json()["code"] == link["code"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https:/example.com",
+        "http://",
+        "https://exa mple.com",
+        "https://example.com:99999",
+        "https://user:password@example.com",
+        "https://example.com/\r\nnext",
+    ],
+)
+def test_invalid_destinations_on_create_and_update(logged_in, link, url):
+    assert (
+        logged_in.post("/api/links", json={"name": "Invalid", "target_url": url}).status_code == 422
+    )
+    assert logged_in.patch(f"/api/links/{link['id']}", json={"target_url": url}).status_code == 422
+    assert logged_in.get(f"/api/links/{link['id']}").json()["target_url"] == link["target_url"]
+
+
+def test_valid_destination_is_normalized(logged_in):
+    response = logged_in.post(
+        "/api/links",
+        json={
+            "name": "Valid",
+            "target_url": "  HTTPS://EXAMPLE.COM/path?q=value#section  ",
+            "custom_code": "  my-link  ",
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["target_url"] == "https://example.com/path?q=value#section"
+    assert response.json()["code"] == "my-link"
 
 
 def test_code_collision_retries(logged_in):

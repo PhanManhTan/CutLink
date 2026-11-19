@@ -34,6 +34,10 @@ docker compose down -v
 
 The default `.env` values are for localhost only. `JWT_SECRET` must be at least 32 characters. AWS injects a generated secret and sets `COOKIE_SECURE=true`. `ALLOWED_ORIGINS` is a JSON list of exact origins with no trailing slash. Mutating HTTP requests, including scripted requests, must send an allowed `Origin` header. URLs must use HTTP or HTTPS. Passwords must contain 10–128 characters.
 
+When creating a link, the domain and `/r/` prefix are fixed to the app's current origin. Enter an optional custom ending such as `my-portfolio` to share `http://localhost:5173/r/my-portfolio`. Leave it blank for a random eight-character code. Custom endings are case-sensitive, use 3–64 letters, numbers, hyphens or underscores, and start with a letter or number. An ending already used by any account returns `409` instead of being silently replaced. Short codes stay fixed when editing a link.
+
+Destination validation runs on both create and edit, in the browser and API: a full HTTP/HTTPS URL with a valid host/port is required, credentials and control characters are rejected, and the normalized URL must fit the database length. This checks URL structure; it does not guarantee the destination website is currently online.
+
 ## Python venv + pip development
 
 Use Python 3.12 or newer. No uv installation is needed.
@@ -135,7 +139,7 @@ This is one demo environment with deliberate deployment downtime. NAT, ALB, Farg
 
 Requires PowerShell 7, AWS CLI v2 with a configured profile, Docker with buildx, Node 22+, npm, Git, and GHCR login. Choose an AWS region with at least two AZs and the specified RDS instance class. Commit the source before deploying, because image tags use the commit SHA.
 
-Authenticate Docker to GHCR using your credential manager or `docker login ghcr.io` with a GitHub token that can write packages. **Make the backend package public** in GitHub package settings; ECS pulls it without registry credentials. The deploy script checks anonymous access and stops if it is private. AWS deployment is manual; GitHub Actions handles tests and build artifacts.
+Authenticate Docker to GHCR using your credential manager or `docker login ghcr.io` with a GitHub token that can write packages. **Make the backend package public** in GitHub package settings; ECS pulls it without registry credentials. The deploy script checks anonymous access and stops if it is private. Backend deployment is manual. GitHub Actions can publish its image and upload frontend builds to S3 after successful CI on `main`; see [publication setup](docs/github-actions.md).
 
 ```powershell
 pwsh -File scripts/deploy.ps1 `
@@ -176,7 +180,7 @@ The base stack takes a final RDS snapshot and retains the frontend bucket and lo
 
 ## Scope and tradeoffs
 
-- Eight-character random case-sensitive codes have a database uniqueness constraint and collision retry.
+- Codes can be random (eight characters) or custom (3–64 characters), with a shared database uniqueness constraint. Random collisions retry; duplicate custom endings return `409`. Migration `0002` widens the column without changing existing links.
 - Sessions are eight-hour HS256 JWTs in HttpOnly, SameSite=Lax cookies (Secure on AWS). Logout clears the browser cookie; there is no token revocation table, password reset, email verification or refresh token flow in this version.
 - Redirects are direct HTTP 302 with `Cache-Control: no-store`. Cache entries live for 30 seconds; updates/deletes invalidate after commit. If invalidation fails or races another request, an old destination can remain visible for up to the cache TTL.
 - Publishing uses short Redis socket deadlines and no request-side publish retry. Failed publishes do not block redirects. Click UUIDs deduplicate worker retries. Rollups upsert absolute UTC daily counts under a transaction advisory lock, so repeated runs do not add counts twice.
@@ -196,11 +200,11 @@ compose.yaml
 
 ## GitHub Actions
 
-`.github/workflows/ci.yml` runs on branch pushes, pull requests, and manual dispatch. No AWS or GHCR credentials are required for CI.
+`.github/workflows/ci.yml` runs on branch pushes, pull requests, and manual dispatch. No AWS or GHCR credentials are required for CI tests.
 
 - Backend jobs create a pip venv on Python 3.12 and 3.14, check dependencies and Python style, and run the integration suite against PostgreSQL 17 and Redis 7 service containers. Migration fixtures apply the initial schema twice on an empty database.
 - The frontend job runs `npm ci` and the TypeScript/production build, then uploads `frontend-dist` for review.
 - The infrastructure job checks both CloudFormation templates and parses all PowerShell scripts.
 - The Compose job builds real images, forces a migration failure and asserts that the API never starts, starts the full stack, runs HTTP smoke checks, waits for a real worker and Beat to process exactly one click, and stops Redis/PostgreSQL to verify fallback and recovery. Container logs are uploaded on failure.
 
-Use the GitHub **Actions → CI → Run workflow** button to run manually. Set the CI jobs as required checks in branch protection if desired. Deployment remains `scripts/deploy.ps1`; this workflow does not provision AWS resources.
+After all checks pass on a `main` push, CD publishes the backend image to GHCR and uploads the tested frontend build to S3. It does not deploy the backend or run migrations. Feature branches and PRs only test. For a manual main release use **Actions → CI / CD → Run workflow** and enable `publish_release`; leave it off for tests only. Set the CI jobs as required checks in branch protection if desired. Configure the production environment using [docs/github-actions.md](docs/github-actions.md). No AWS resources are provisioned by this workflow.

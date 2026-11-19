@@ -27,8 +27,36 @@ def migrate():
         db.execute(text("DROP SCHEMA public CASCADE"))
         db.execute(text("CREATE SCHEMA public"))
     config = Config("alembic.ini")
+    command.upgrade(config, "0001")
+    with engine.begin() as db:
+        db.execute(
+            text(
+                "INSERT INTO users (id, email, password_hash) VALUES "
+                "('00000000-0000-0000-0000-000000000001', 'migration@example.com', 'test')"
+            )
+        )
+        db.execute(
+            text(
+                "INSERT INTO links (id, owner_id, code, name, target_url) VALUES "
+                "('00000000-0000-0000-0000-000000000002', "
+                "'00000000-0000-0000-0000-000000000001', 'OldCode1', 'Existing', "
+                "'https://example.com/existing')"
+            )
+        )
     command.upgrade(config, "head")
     command.upgrade(config, "head")
+    with engine.connect() as db:
+        assert db.scalar(text("SELECT code FROM links WHERE name = 'Existing'")) == "OldCode1"
+        assert (
+            db.scalar(
+                text(
+                    "SELECT character_maximum_length FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'links' "
+                    "AND column_name = 'code'"
+                )
+            )
+            == 64
+        )
     yield
     engine.dispose()
 

@@ -1,17 +1,22 @@
-name: CI
+name: CI / CD
 
 on:
   push:
     branches: ['**']
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish backend image and upload frontend to S3 (main only)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   backend:
@@ -159,3 +164,110 @@ jobs:
       - name: Stop test stack
         if: always()
         run: docker compose down -v --remove-orphans
+
+  publish_backend:
+    name: CD / publish backend image to GHCR
+    needs: [backend, frontend, infrastructure, compose]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set image name
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish backend (API, worker, Beat and migration)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          target: production
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ github.sha }}
+            ${{ steps.image.outputs.name }}:latest
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Record immutable backend image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          printf '%s@%s\n' "$IMAGE" "$DIGEST" > backend-image.txt
+          printf 'Backend image: %s@%s\n\nECS deployment remains manual.\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-image
+          path: backend-image.txt
+
+  publish_frontend:
+    name: CD / upload frontend build to S3
+    needs: [backend, frontend, infrastructure, compose]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    # Finish an S3 index-last upload before starting another release, even across main pushes.
+    concurrency:
+      group: frontend-s3-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      FRONTEND_BUCKET: ${{ vars.FRONTEND_BUCKET }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+    steps:
+      - name: Validate AWS configuration
+        shell: bash
+        run: |
+          for name in AWS_REGION AWS_ROLE_ARN FRONTEND_BUCKET; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Set production environment variable $name before publishing frontend."
+              exit 1
+            fi
+          done
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-dist
+      - name: Authenticate to AWS using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: cutlink-frontend-${{ github.run_id }}
+      - name: Upload hashed assets first and index last
+        shell: bash
+        run: |
+          aws s3 sync frontend-dist/assets "s3://$FRONTEND_BUCKET/assets" --cache-control 'public,max-age=31536000,immutable' --only-show-errors
+          aws s3 cp frontend-dist/ "s3://$FRONTEND_BUCKET/" --recursive --exclude 'assets/*' --exclude 'index.html' --cache-control 'no-cache' --only-show-errors
+          aws s3 cp frontend-dist/index.html "s3://$FRONTEND_BUCKET/index.html" --cache-control 'no-cache' --content-type 'text/html' --only-show-errors
+      - name: Invalidate the CloudFront entry point
+        if: env.CLOUDFRONT_DISTRIBUTION_ID != ''
+        shell: bash
+        run: |
+          invalidation=$(aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --paths '/index.html' --query 'Invalidation.Id' --output text)
+          aws cloudfront wait invalidation-completed --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --id "$invalidation"
+      - name: Record frontend publication
+        run: printf 'Frontend build uploaded to s3://%s. Old hashed assets were retained.\n' "$FRONTEND_BUCKET" >> "$GITHUB_STEP_SUMMARY"

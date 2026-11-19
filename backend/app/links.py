@@ -1,4 +1,5 @@
 import logging
+import re
 import secrets
 import string
 import uuid
@@ -14,7 +15,15 @@ from app import cache
 from app.auth import current_user
 from app.database import get_db
 from app.models import ClickEvent, DailyLinkStat, Link, User
-from app.schemas import DayStat, LinkCreate, LinkOut, LinkPage, LinkPatch, LinkStats
+from app.schemas import (
+    SHORT_CODE_PATTERN,
+    DayStat,
+    LinkCreate,
+    LinkOut,
+    LinkPage,
+    LinkPatch,
+    LinkStats,
+)
 from app.tasks import record_click
 
 router = APIRouter(tags=["links"])
@@ -44,7 +53,8 @@ def create_link(
             owner_id=user.id,
             name=body.name,
             target_url=str(body.target_url),
-            code="".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8)),
+            code=body.custom_code
+            or "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8)),
         )
         try:
             with db.begin_nested():
@@ -55,6 +65,10 @@ def create_link(
         except IntegrityError as exc:
             if getattr(exc.orig.diag, "constraint_name", "") != "links_code_key":
                 raise
+            if body.custom_code is not None:
+                raise HTTPException(
+                    409, "This short link is already taken. Choose another ending."
+                ) from None
     raise HTTPException(503, "Please try again")
 
 
@@ -159,7 +173,7 @@ def stats(link_id: uuid.UUID, user: User = Depends(current_user), db: Session = 
 
 @router.get("/r/{code}")
 def redirect(code: str, db: Session = Depends(get_db)):
-    if len(code) != 8 or not code.isascii() or not code.isalnum():
+    if not re.fullmatch(SHORT_CODE_PATTERN, code):
         raise HTTPException(404, "Link not found")
     cached = cache.read_link(code)
     if cached:

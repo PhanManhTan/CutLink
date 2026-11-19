@@ -42,10 +42,14 @@ try {
     Assert-Status (Request '/api/auth/logout' 'POST') 204 'Logout'
     Assert-Status (Request '/api/auth/login' 'POST' @{email = $email; password = $password}) 200 'Login'
     Assert-Status (Request '/api/auth/me') 200 'Session cookie round trip'
-    $create = Request '/api/links' 'POST' @{name = 'Smoke test'; target_url = 'https://example.com/?cutlink=smoke'}
+    $customCode = "smoke-$([Guid]::NewGuid().ToString('N'))"
+    Assert-Status (Request '/api/links' 'POST' @{name = 'Invalid URL'; target_url = 'javascript:alert(1)'}) 422 'URL validation'
+    $create = Request '/api/links' 'POST' @{name = 'Smoke test'; target_url = 'https://example.com/?cutlink=smoke'; custom_code = $customCode}
     Assert-Status $create 201 'Create'
     $link = $create.Content | ConvertFrom-Json
     $linkId = $link.id
+    if ($link.code -ne $customCode) { throw 'Custom ending was not preserved' }
+    Assert-Status (Request '/api/links' 'POST' @{name = 'Duplicate ending'; target_url = 'https://example.com'; custom_code = $customCode}) 409 'Custom ending uniqueness'
     $redirect = Request "/r/$($link.code)"
     Assert-Status $redirect 302 'Redirect'
     Assert-Uncached $redirect

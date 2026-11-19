@@ -21,7 +21,7 @@ class Link(Base):
     owner_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    code: Mapped[str] = mapped_column(String(8), unique=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True)
     name: Mapped[str] = mapped_column(String(120))
     target_url: Mapped[str] = mapped_column(String(4096))
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
