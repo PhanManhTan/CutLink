@@ -17,13 +17,19 @@ IMAGE = "ghcr.io/phanmanhtan/cutlink@sha256:" + "a" * 64
 
 class ReleaseTests(unittest.TestCase):
     def run_release(
-        self, migration_exit=0, migration_start=True, active=False, rolled_back=False
+        self,
+        migration_exit=0,
+        migration_start=True,
+        active=False,
+        rolled_back=False,
+        health_delay=0,
+        health_timeout=False,
     ):
         calls = []
         descriptions = 0
 
         def fake(*args, payload=None):
-            nonlocal descriptions
+            nonlocal descriptions, health_delay
             calls.append((args, payload))
             if args[:2] == ("cloudformation", "describe-stacks"):
                 outputs = {
@@ -50,7 +56,7 @@ class ReleaseTests(unittest.TestCase):
                     "services": [
                         {
                             "taskDefinition": "new-app:2"
-                            if descriptions == 3 and not rolled_back
+                            if descriptions >= 3 and not rolled_back
                             else "app:1",
                             "desiredCount": 1,
                             "runningCount": 0 if descriptions == 2 else 1,
@@ -107,14 +113,25 @@ class ReleaseTests(unittest.TestCase):
                     container["exitCode"] = migration_exit
                 return {"tasks": [{"containers": [container]}]}
             if args[:2] == ("elbv2", "describe-target-health"):
+                healthy = health_delay <= 0 and not health_timeout
+                health_delay -= 1
                 return {
-                    "TargetHealthDescriptions": [{"TargetHealth": {"State": "healthy"}}]
+                    "TargetHealthDescriptions": [
+                        {"TargetHealth": {"State": "healthy" if healthy else "initial"}}
+                    ]
                 }
             return {}
 
         with (
             tempfile.TemporaryDirectory() as directory,
             patch.object(release, "aws", side_effect=fake),
+            patch.object(release.time, "sleep"),
+            patch.object(
+                release.time,
+                "monotonic",
+                side_effect=[0, 181] if health_timeout else None,
+                return_value=0,
+            ),
         ):
             state = Path(directory) / "state.json"
             try:
@@ -188,6 +205,17 @@ class ReleaseTests(unittest.TestCase):
 
     def test_detects_circuit_breaker_rollback(self):
         _, state = self.run_release(rolled_back=True)
+        self.assertEqual(state["status"], "deployment_failed")
+
+    def test_waits_for_first_healthy_alb_probe(self):
+        calls, state = self.run_release(health_delay=1)
+        self.assertEqual(state["status"], "healthy")
+        self.assertEqual(
+            sum(args[:2] == ("elbv2", "describe-target-health") for args, _ in calls), 2
+        )
+
+    def test_unhealthy_target_times_out_as_failed_release(self):
+        _, state = self.run_release(health_timeout=True)
         self.assertEqual(state["status"], "deployment_failed")
 
     def test_rejects_mutable_tag_before_aws(self):

@@ -6,6 +6,7 @@ import json
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 IMAGE_PATTERN = r"ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}"
@@ -219,21 +220,32 @@ def release(base_stack, app_stack, image, state_path):
         "--services",
         service_name,
     )
-    deployed = service()
-    if deployed["taskDefinition"] != app_arn or deployed["runningCount"] != 1:
-        save("deployment_failed")
-        raise RuntimeError(
-            "Expected application revision is not running; check ECS circuit breaker"
+    # ECS's stable waiter can precede the first healthy ALB probe on a stopped service.
+    deadline = time.monotonic() + 180
+    while True:
+        deployed = service()
+        if deployed["taskDefinition"] != app_arn:
+            save("deployment_failed")
+            raise RuntimeError(
+                "Expected application revision changed; check ECS circuit breaker"
+            )
+        health = aws(
+            "elbv2",
+            "describe-target-health",
+            "--target-group-arn",
+            base["TargetGroupArn"],
         )
-    health = aws(
-        "elbv2", "describe-target-health", "--target-group-arn", base["TargetGroupArn"]
-    )
-    if not any(
-        item["TargetHealth"]["State"] == "healthy"
-        for item in health.get("TargetHealthDescriptions", [])
-    ):
-        save("deployment_failed")
-        raise RuntimeError("ALB has no database-ready healthy target")
+        if deployed["runningCount"] == 1 and any(
+            item["TargetHealth"]["State"] == "healthy"
+            for item in health.get("TargetHealthDescriptions", [])
+        ):
+            break
+        if time.monotonic() >= deadline:
+            save("deployment_failed")
+            raise RuntimeError(
+                "ALB did not report a database-ready target within 180 seconds"
+            )
+        time.sleep(5)
     save("healthy")
     print(f"Released {image} to {service_name}; ALB target is healthy.")
     return state
