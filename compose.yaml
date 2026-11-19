@@ -1,0 +1,92 @@
+name: cutlink
+
+x-backend: &backend
+  image: cutlink-backend:local
+  build: ./backend
+  environment: &backend-env
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cutlink}:${POSTGRES_PASSWORD:-cutlink-local-only}@db:5432/${POSTGRES_DB:-cutlink}
+    REDIS_URL: redis://redis:6379/0
+    JWT_SECRET: ${JWT_SECRET:?Copy .env.example to .env and set JWT_SECRET}
+    COOKIE_SECURE: "false"
+    ALLOWED_ORIGINS: '${ALLOWED_ORIGINS:-["http://localhost:5173","http://127.0.0.1:5173"]}'
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cutlink}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cutlink-local-only}
+      POSTGRES_DB: ${POSTGRES_DB:-cutlink}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["127.0.0.1:6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db: {condition: service_healthy}
+  api:
+    <<: *backend
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/live', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      start_period: 20s
+      retries: 3
+  worker:
+    <<: *backend
+    command: ["celery", "-A", "app.tasks:celery", "worker", "--pool=solo", "--concurrency=1", "--loglevel=INFO"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+  beat:
+    <<: *backend
+    command: ["celery", "-A", "app.tasks:celery", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+  frontend:
+    build: ./frontend
+    volumes:
+      - ./frontend/src:/app/src:ro
+      - ./frontend/public:/app/public:ro
+      - ./frontend/index.html:/app/index.html:ro
+      - ./frontend/vite.config.ts:/app/vite.config.ts:ro
+    environment:
+      API_PROXY_TARGET: http://api:8000
+    ports: ["127.0.0.1:5173:5173"]
+    depends_on:
+      api: {condition: service_healthy}
+  test:
+    <<: *backend
+    image: cutlink-test:local
+    profiles: [test]
+    build:
+      context: ./backend
+      target: test
+    environment:
+      <<: *backend-env
+      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-cutlink}:${POSTGRES_PASSWORD:-cutlink-local-only}@db:5432/cutlink_test
+      ALLOWED_ORIGINS: '["http://testserver"]'
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+volumes:
+  postgres:
