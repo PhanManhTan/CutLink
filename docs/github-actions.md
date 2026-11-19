@@ -1,96 +1,63 @@
-# CI and publication setup
+# GitHub Actions
 
-The workflow in `.github/workflows/ci.yml` has two publication jobs after all tests pass:
+## What runs
 
-| Event | CI tests and builds | Upload frontend to S3 | Publish backend to GHCR | Deploy backend to ECS |
-| --- | --- | --- | --- | --- |
-| Feature branch push / pull request | Yes | No | No | No |
-| Push / merge to `main` | Yes | Yes | Yes | No |
-| Manual run on `main`, `publish_release=false` | Yes | No | No | No |
-| Manual run on `main`, `publish_release=true` | Yes | Yes | Yes | No |
-
-Frontend publication reuses the `frontend-dist` artifact produced by the frontend CI job. Hashed assets are uploaded first, other public files next, and `index.html` last. Existing assets are retained for rollback. The index has `Cache-Control: no-cache`; hashed assets have a one-year immutable cache policy. Main workflows finish in sequence so a newer run cannot cancel an upload halfway through.
-
-Backend publication builds the `production` Dockerfile target for Linux AMD64, pushes `ghcr.io/phanmanhtan/cutlink:<full-commit-sha>` and `:latest`, and uploads a `backend-image.txt` artifact containing the immutable `image@sha256:...` reference. It uses the built-in `GITHUB_TOKEN`. There are no ECS, migration, or CloudFormation deployment commands in these publication jobs. Backend deployment and migration remain a separate operator action. Frontend changes must support the currently deployed API; deploy a required backend capability before publishing a frontend that depends on it.
-
-## 1. Prepare AWS hosting
-
-No AWS resources are created by the workflow. Use an existing frontend bucket, or provision the hosting infrastructure separately using `infra/base.yaml` when ready. For the bundled architecture use its `FrontendBucket` and `DistributionId` outputs. The bucket stays private; CloudFront reads it using OAC. S3 versioning preserves previous index versions. The distribution routes `/api/*` and `/r/*` to the API origin.
-
-## 2. Add GitHub's OIDC provider to AWS
-
-In AWS IAM, add an OpenID Connect identity provider if the account does not already have one:
-
-- Provider URL: `https://token.actions.githubusercontent.com`
-- Audience: `sts.amazonaws.com`
-
-Create an IAM role for the frontend publication job. Its trust policy should restrict the repository and production environment:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Principal": {
-      "Federated": "arn:aws:iam::YOUR_ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"
-    },
-    "Action": "sts:AssumeRoleWithWebIdentity",
-    "Condition": {
-      "StringEquals": {
-        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-        "token.actions.githubusercontent.com:sub": "repo:PhanManhTan@150802908/CutLink@1464239414:environment:production"
-      }
-    }
-  }]
-}
-```
-
-This repository was created after July 15, 2026, so the example uses GitHub's default immutable subject format with owner/repository IDs. If you have explicitly changed the repository's OIDC subject configuration, match that configuration instead. The legacy name-only format is `repo:PhanManhTan/CutLink:environment:production`; use it only when the repository is configured to issue that subject. Do not replace the repository/environment restriction with a wildcard.
-
-Attach this permissions policy, replacing the account, bucket and distribution IDs. Omit the CloudFront statement if you will not configure invalidation:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["s3:ListBucket", "s3:GetBucketLocation"],
-      "Resource": "arn:aws:s3:::YOUR_FRONTEND_BUCKET"
-    },
-    {
-      "Effect": "Allow",
-      "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::YOUR_FRONTEND_BUCKET/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": ["cloudfront:CreateInvalidation", "cloudfront:GetInvalidation"],
-      "Resource": "arn:aws:cloudfront::YOUR_ACCOUNT_ID:distribution/YOUR_DISTRIBUTION_ID"
-    }
-  ]
-}
-```
-
-The bundled bucket uses SSE-S3 encryption. A custom bucket using a customer-managed KMS key also needs the corresponding KMS permissions. The role above cannot delete S3 objects, update ECS, change CloudFormation stacks, or read application secrets.
-
-## 3. Configure GitHub's production environment
-
-Go to **Repository Settings → Environments → New environment**, name it `production`, and restrict deployment branches to `main`. Add these **environment variables**:
-
-| Variable | Required | Example / source |
+| Event | CI | CD |
 | --- | --- | --- |
-| `AWS_REGION` | Yes | `ap-southeast-1` |
-| `AWS_ROLE_ARN` | Yes | `arn:aws:iam::123456789012:role/cutlink-frontend-publisher` |
-| `FRONTEND_BUCKET` | Yes | Bucket name only, without `s3://`; use base stack `FrontendBucket` |
-| `CLOUDFRONT_DISTRIBUTION_ID` | Optional | Use base stack `DistributionId`; enables index invalidation and wait |
+| Push to `feat/**` | Tests and builds | No |
+| PR targeting `main` | Tests and builds | No |
+| Push/merge to `main` | Tests, builds, release artifacts | After CI succeeds |
+| Manual CI | Tests and builds | No |
+| Manual CD | Validates a supplied main CI run ID | Publishes that tested release |
 
-No long-lived AWS access key is needed. The workflow requests a short-lived identity using OIDC. Until the required variables exist, feature branch/PR CI still works; a main release's frontend publication fails with an explicit missing-variable message. The backend publishing job is independent and can still publish its image.
+`ci.yml` is named **CI**. `cd.yml` listens for its completed `workflow_run` on main. CD verifies the run succeeded, came from this repository's main push, and matches the current main SHA. Superseded runs are skipped. Both files must be on the default branch before this chain can run. See [GitHub workflow_run](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run).
 
-For GHCR, GitHub's automatic token needs package write permission, which is declared only on the backend publication job. If an existing package belongs to this repository, ensure the repository has Actions access to that package. After the first publish, make the package public in GitHub package settings if ECS will pull without registry credentials, as the bundled infrastructure expects.
+## Release sequence
 
-## 4. Run and inspect
+1. CI exports the tested backend image and frontend build on main pushes.
+2. CD loads the image, tags it with the CI commit SHA, and pushes it to GHCR. There is no second build.
+3. CD checks anonymous pull access. Make the GHCR package public for this demo.
+4. New application and migration task revisions use the same image digest.
+5. The old task stops completely, including Beat. A separate private Fargate task runs migration.
+6. Only exit code `0` permits application startup. CD waits for ECS stability and ALB readiness.
+7. CD uploads frontend assets, then index.html, and invalidates the CloudFront index.
 
-Merge a tested change into `main`, or use **Actions → CI / CD → Run workflow**, choose `main` and enable `publish_release`. Inspect both CD jobs and their summaries. Download `backend-image` for the immutable image digest. If tests fail, neither publication job runs. If publishing frontend fails, fix the AWS environment configuration and rerun the failed job. Restore an earlier S3 index version and invalidate `/index.html` to roll back the frontend; old hashed assets remain available.
+Migration failure leaves the app stopped and prevents frontend publication. The `fargate-release-state` artifact records the previous task definition. CD runs are serialized and never canceled midway by a newer CI run. Artifact download and checkout use the verified CI run ID and SHA, never PR/feature artifacts.
 
-Official references: [GitHub OIDC with AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws), [Publishing Docker images](https://docs.github.com/en/actions/tutorials/publish-packages/publish-docker-images).
+## Configure production once
+
+Complete [AWS setup](aws.md). In **Repository Settings → Environments**, create `production`, restrict deployments to main, and add:
+
+| Variable | Value |
+| --- | --- |
+| `AWS_REGION` | Region of your stacks |
+| `AWS_ROLE_ARN` | `RoleArn` from `cutlink-github` |
+| `BASE_STACK_NAME` | `cutlink-base` |
+| `APP_STACK_NAME` | `cutlink-app` |
+| `FRONTEND_BUCKET` | Base stack `FrontendBucket` |
+| `CLOUDFRONT_DISTRIBUTION_ID` | Base stack `DistributionId`; enables invalidation |
+| `SITE_URL` | Base stack `SiteUrl`; enables final smoke test |
+
+OIDC replaces long-lived AWS keys. The IAM template grants release access to the existing ECS service, task roles, bucket and distribution. It cannot create VPC/RDS infrastructure or read application secrets. Its default subject is:
+
+```text
+repo:PhanManhTan@150802908/CutLink@1464239414:environment:production
+```
+
+If you customized the OIDC subject, set `RepositorySubject` to the exact issued value. The legacy name-only subject applies only if explicitly configured. See [GitHub OIDC with AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws).
+
+GHCR uses `GITHUB_TOKEN` with package write permission. An existing package must grant this repository Actions access. Make it public before the first Fargate release. See [GitHub container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+
+## Trigger or retry
+
+- Normal release: merge to main; CI runs, then CD.
+- Retry: rerun failed CD jobs after correcting configuration.
+- Manual CD: enter a successful CI run ID from a push to the current main commit. Manual CI runs do not export the release image and are rejected.
+
+Without production variables, CD fails before assuming an AWS role. Feature CI never publishes. A feature test cannot verify a real AWS release.
+
+## Release speed
+
+The backend image and frontend are built once, tested, and promoted unchanged. CD updates task revisions and the existing service; it does not rebuild or redeploy CloudFormation/RDS/VPC. Image pull, startup, migration and health checks still determine duration.
+
+This single-task demo accepts downtime to keep one Beat running. Health grace is tolerance for startup errors, not a mandatory delay before healthy traffic. See [ECS service updates](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/update-service-parameters.html).

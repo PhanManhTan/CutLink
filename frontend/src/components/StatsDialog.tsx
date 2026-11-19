@@ -28,7 +28,7 @@ export default function StatsDialog({
   }, [link.id]);
   const max = Math.max(1, ...(stats?.days.map((day) => day.clicks) || []));
   return (
-    <Modal title="A closer look at your clicks" close={close}>
+    <Modal title="Link analytics" close={close}>
       <p className="muted">{link.name} · Last 30 days (UTC)</p>
       {error && (
         <div role="alert" className="alert alert-danger">

@@ -126,8 +126,8 @@ export default function Dashboard({
           <span className="note-icon">
             <Activity size={20} />
           </span>
-          <h3>Good things, neatly shared.</h3>
-          <p>Every little link is a chance to connect.</p>
+          <h3>Your links, under control.</h3>
+          <p>Choose a custom ending, share your link, and track its clicks.</p>
           <div className="note-decoration">
             <span />
             <span />
@@ -159,13 +159,13 @@ export default function Dashboard({
         <div className="content">
           <div className="page-heading">
             <div>
-              <span className="eyebrow">MAKE EVERY CONNECTION COUNT</span>
+              <span className="eyebrow">SHORTEN. SHARE. TRACK.</span>
               <h1>
-                Small links. Big possibilities<span>.</span>
+                Cut the long link<span>.</span>
               </h1>
               <p>
-                A little less URL. A lot more possibility. All your links, in
-                one place.
+                Create short links, choose custom endings, and track click activity
+                in one place.
               </p>
             </div>
             <button
@@ -194,19 +194,19 @@ export default function Dashboard({
               label="Total links"
               value={page?.total}
               icon={<Link2 size={20} />}
-              foot="All your connections in one place"
+              foot="Links in your account"
             />
             <Summary
               label="Total clicks"
               value={page?.total_clicks}
               icon={<BarChart3 size={20} />}
-              foot="Every visit tells a little story"
+              foot="Recorded visits across your links"
             />
             <Summary
               label="Active links"
               value={page?.active}
               icon={<Activity size={20} />}
-              foot="Out there, ready to be discovered"
+              foot="Ready to redirect visitors"
             />
           </section>
           <section className="links-section">
@@ -215,7 +215,7 @@ export default function Dashboard({
                 <h2>
                   My links <span>{page?.total || 0}</span>
                 </h2>
-                <p>Your shortcuts to something good.</p>
+                <p>Copy, edit, pause, or review a link’s clicks.</p>
               </div>
               <div className="search-field">
                 <Search size={18} />
@@ -243,7 +243,7 @@ export default function Dashboard({
                 <tbody>
                   {filtered.map((link) => (
                     <tr key={link.id}>
-                      <td>
+                      <td className="destination-cell">
                         <div className="link-info">
                           <span className="link-tile">
                             <Link2 size={22} />
@@ -262,7 +262,7 @@ export default function Dashboard({
                           </div>
                         </div>
                       </td>
-                      <td>
+                      <td className="short-cell">
                         <div className="short-link">
                           <a
                             href={`/r/${link.code}`}
@@ -281,7 +281,7 @@ export default function Dashboard({
                           </button>
                         </div>
                       </td>
-                      <td>
+                      <td className="clicks-cell" data-label="Clicks">
                         <button
                           className="click-count"
                           onClick={() => setStats(link)}
@@ -291,7 +291,7 @@ export default function Dashboard({
                           {number.format(link.total_clicks)}
                         </button>
                       </td>
-                      <td>
+                      <td className="status-cell">
                         <button
                           className={`status-badge ${link.enabled ? "enabled" : "disabled"}`}
                           disabled={busy === link.id}
@@ -303,7 +303,7 @@ export default function Dashboard({
                           {link.enabled ? "Active" : "Paused"}
                         </button>
                       </td>
-                      <td>
+                      <td className="actions-cell">
                         <div className="row-actions">
                           <button
                             className="icon-btn"
@@ -311,6 +311,7 @@ export default function Dashboard({
                             aria-label={`Edit ${link.name}`}
                           >
                             <Pencil size={16} />
+                            <span className="action-label">Edit</span>
                           </button>
                           <button
                             className="icon-btn delete-btn"
@@ -318,6 +319,7 @@ export default function Dashboard({
                             aria-label={`Delete ${link.name}`}
                           >
                             <Trash2 size={16} />
+                            <span className="action-label">Delete</span>
                           </button>
                         </div>
                       </td>
@@ -328,7 +330,7 @@ export default function Dashboard({
             </div>
             {!page && !error && (
               <div className="empty-state" role="status">
-                Gathering your connections…
+                Loading your links…
               </div>
             )}
             {page && filtered.length === 0 && (
@@ -338,13 +340,13 @@ export default function Dashboard({
                 </span>
                 <h3>
                   {query
-                    ? "No matching links just yet"
-                    : "Your first connection starts here"}
+                    ? "No links match your search"
+                    : "Create your first short link"}
                 </h3>
                 <p>
                   {query
                     ? "Try another name, code, or destination on this page."
-                    : "Turn a long address into something short, sweet, and ready to share."}
+                    : "Paste a destination URL and choose an ending, or let us generate one."}
                 </p>
                 {!query && (
                   <button
@@ -387,9 +389,9 @@ export default function Dashboard({
             )}
           </section>
           <footer className="page-footer">
-            <span>Less URL. More possibility.</span>
+            <span>Cut the long link. Keep the connection.</span>
             <span>
-              Made for your next connection <Link2 size={14} />
+              Your links, in one place <Link2 size={14} />
             </span>
           </footer>
         </div>

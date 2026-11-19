@@ -54,7 +54,8 @@ try {
         $previous = $null
         if ($existing.Count -gt 0) {
             $old = Get-StackOutputs $appName
-            $task = Get-AwsJson @('ecs', 'describe-task-definition', '--task-definition', $old.ApplicationTaskArn)
+            $oldService = Get-AwsJson @('ecs', 'describe-services', '--cluster', $base.ClusterArn, '--services', $old.ServiceName)
+            $task = Get-AwsJson @('ecs', 'describe-task-definition', '--task-definition', $oldService.services[0].taskDefinition)
             $previousImage = @($task.taskDefinition.containerDefinitions | Where-Object name -eq 'api')[0].image
             $versions = Get-AwsJson @('s3api', 'list-object-versions', '--bucket', $base.FrontendBucket, '--prefix', 'index.html')
             $indexVersion = $null
@@ -68,7 +69,6 @@ try {
                 capturedAt = [DateTime]::UtcNow.ToString('o')
             }
             $previousFile = Join-Path $stateDirectory 'previous-release.json'
-            $oldService = Get-AwsJson @('ecs', 'describe-services', '--cluster', $base.ClusterArn, '--services', $old.ServiceName)
             # A rerun after migration failure sees the failed task definition and desired=0.
             # Preserve the captured running release instead of replacing it with that failed image.
             if ($oldService.services[0].runningCount -gt 0 -or -not (Test-Path -LiteralPath $previousFile)) {

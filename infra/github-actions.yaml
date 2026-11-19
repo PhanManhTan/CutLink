@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: GitHub OIDC role for S3 publication and existing Cutlink Fargate releases
+Parameters:
+  BaseStackName: {Type: String, Default: cutlink-base}
+  AppStackName: {Type: String, Default: cutlink-app}
+  ServiceName: {Type: String}
+  FrontendBucket: {Type: String}
+  DistributionId: {Type: String}
+  OidcProviderArn: {Type: String}
+  RepositorySubject:
+    Type: String
+    Default: repo:PhanManhTan@150802908/CutLink@1464239414:environment:production
+Resources:
+  ReleaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Federated: !Ref OidcProviderArn}
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Ref RepositorySubject
+      Policies:
+        - PolicyName: cutlink-production-release
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource:
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${BaseStackName}/*
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AppStackName}/*
+              - Effect: Allow
+                Action: [ecs:DescribeServices, ecs:UpdateService]
+                Resource: !Sub
+                  - arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${ClusterName}/${ServiceName}
+                  - ClusterName: !Select [1, !Split ['/', {Fn::ImportValue: !Sub '${BaseStackName}-ClusterArn'}]]
+              - Effect: Allow
+                Action: ecs:DescribeTaskDefinition
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${AppStackName}-application:*
+                  - !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${AppStackName}-migration:*
+              - Effect: Allow
+                Action: [ecs:RegisterTaskDefinition, ecs:ListTasks, ecs:DescribeTasks, elasticloadbalancing:DescribeTargetHealth]
+                Resource: '*'
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${AppStackName}-migration:*
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: {Fn::ImportValue: !Sub '${BaseStackName}-ClusterArn'}
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - {Fn::ImportValue: !Sub '${BaseStackName}-ExecutionRoleArn'}
+                  - {Fn::ImportValue: !Sub '${BaseStackName}-TaskRoleArn'}
+                Condition:
+                  StringEquals: {iam:PassedToService: ecs-tasks.amazonaws.com}
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: !Sub arn:${AWS::Partition}:s3:::${FrontendBucket}
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub arn:${AWS::Partition}:s3:::${FrontendBucket}/*
+              - Effect: Allow
+                Action: [cloudfront:CreateInvalidation, cloudfront:GetInvalidation]
+                Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DistributionId}
+Outputs:
+  RoleArn: {Value: !GetAtt ReleaseRole.Arn}

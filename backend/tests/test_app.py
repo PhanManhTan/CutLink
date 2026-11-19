@@ -368,3 +368,15 @@ def test_liveness_readiness_and_recovery(client):
         assert client.get("/api/health/live").status_code == 200
         assert client.get("/api/health/ready").status_code == 503
     assert client.get("/api/health/ready").status_code == 200
+
+
+def test_missing_short_link_has_a_readable_page(client):
+    response = client.get("/r/does-not-exist")
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["cache-control"] == "no-store"
+    assert "ask the sender for a new link" in response.text
+    # API errors stay JSON with their original status.
+    assert (
+        client.get("/api/no-such-endpoint").headers["content-type"].startswith("application/json")
+    )
