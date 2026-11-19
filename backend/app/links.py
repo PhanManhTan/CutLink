@@ -1,4 +1,4 @@
-import logging
+import re
 import secrets
 import string
 import uuid
@@ -6,19 +6,24 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import Date, cast, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import cache
 from app.auth import current_user
 from app.database import get_db
-from app.models import ClickEvent, DailyLinkStat, Link, User
-from app.schemas import DayStat, LinkCreate, LinkOut, LinkPage, LinkPatch, LinkStats
-from app.tasks import record_click
+from app.models import ClickEvent, Link, User
+from app.schemas import (
+    SHORT_CODE_PATTERN,
+    DayStat,
+    LinkCreate,
+    LinkOut,
+    LinkPage,
+    LinkPatch,
+    LinkStats,
+)
 
 router = APIRouter(tags=["links"])
-logger = logging.getLogger(__name__)
 
 
 def owned_link(link_id: uuid.UUID, user: User, db: Session) -> Link:
@@ -44,7 +49,8 @@ def create_link(
             owner_id=user.id,
             name=body.name,
             target_url=str(body.target_url),
-            code="".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8)),
+            code=body.custom_code
+            or "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8)),
         )
         try:
             with db.begin_nested():
@@ -55,6 +61,10 @@ def create_link(
         except IntegrityError as exc:
             if getattr(exc.orig.diag, "constraint_name", "") != "links_code_key":
                 raise
+            if body.custom_code is not None:
+                raise HTTPException(
+                    409, "This short link is already taken. Choose another ending."
+                ) from None
     raise HTTPException(503, "Please try again")
 
 
@@ -120,7 +130,6 @@ def update_link(
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(link, field, str(value) if field == "target_url" else value)
     db.commit()
-    cache.invalidate(link.code)
     return LinkOut.model_validate(link).model_copy(update={"total_clicks": clicks_for(link.id, db)})
 
 
@@ -131,7 +140,6 @@ def delete_link(
     link = owned_link(link_id, user, db)
     db.execute(delete(Link).where(Link.id == link.id))
     db.commit()
-    cache.invalidate(link.code)
 
 
 @router.get("/api/links/{link_id}/stats", response_model=LinkStats)
@@ -139,13 +147,18 @@ def stats(link_id: uuid.UUID, user: User = Depends(current_user), db: Session = 
     link = owned_link(link_id, user, db)
     today = datetime.now(UTC).date()
     start = today - timedelta(days=29)
+    # Group the stored clicks directly; there is no background rollup to wait for.
+    day = cast(func.timezone("UTC", ClickEvent.clicked_at), Date)
     rows = dict(
         db.execute(
-            select(DailyLinkStat.day, DailyLinkStat.clicks).where(
-                DailyLinkStat.link_id == link.id,
-                DailyLinkStat.day >= start,
-                DailyLinkStat.day <= today,
+            select(day, func.count())
+            .where(
+                ClickEvent.link_id == link.id,
+                ClickEvent.clicked_at >= datetime.combine(start, datetime.min.time(), tzinfo=UTC),
+                ClickEvent.clicked_at
+                < datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=UTC),
             )
+            .group_by(day)
         ).all()
     )
     return LinkStats(
@@ -159,22 +172,14 @@ def stats(link_id: uuid.UUID, user: User = Depends(current_user), db: Session = 
 
 @router.get("/r/{code}")
 def redirect(code: str, db: Session = Depends(get_db)):
-    if len(code) != 8 or not code.isascii() or not code.isalnum():
+    if not re.fullmatch(SHORT_CODE_PATTERN, code):
         raise HTTPException(404, "Link not found")
-    cached = cache.read_link(code)
-    if cached:
-        link_id, url = cached["id"], cached["url"]
-    else:
-        link = db.scalar(select(Link).where(Link.code == code, Link.enabled.is_(True)))
-        if link is None:
-            raise HTTPException(404, "Link not found")
-        link_id, url = str(link.id), link.target_url
-        cache.cache_link(code, link_id, url)
-    try:
-        record_click.apply_async(
-            args=[str(uuid.uuid4()), link_id, datetime.now(UTC).isoformat()],
-            retry=False,
-        )
-    except Exception:
-        logger.warning("Click publish failed; redirect continues", exc_info=True)
-    return RedirectResponse(url, status_code=302, headers={"Cache-Control": "no-store"})
+    # A shared row lock lets clicks run concurrently and serializes edits/deletion with this visit.
+    link = db.scalar(
+        select(Link).where(Link.code == code, Link.enabled.is_(True)).with_for_update(read=True)
+    )
+    if link is None:
+        raise HTTPException(404, "Link not found")
+    db.add(ClickEvent(id=uuid.uuid4(), link_id=link.id, clicked_at=datetime.now(UTC)))
+    db.commit()
+    return RedirectResponse(link.target_url, status_code=302, headers={"Cache-Control": "no-store"})

@@ -1,0 +1,141 @@
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: #13251c70;
+  backdrop-filter: blur(3px);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.dialog-panel {
+  background: #fff;
+  border-radius: 16px;
+  padding: 28px;
+  max-width: 530px;
+  box-shadow: 0 24px 100px #102b2130;
+  max-height: 90vh;
+  overflow: auto;
+}
+.dialog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.dialog-heading h2 {
+  font-size: 1.15rem;
+  font-weight: 650;
+  margin: 0;
+  letter-spacing: -0.5px;
+}
+label {
+  display: block;
+  font-weight: 500;
+  font-size: 0.82rem;
+  margin: 21px 0 9px;
+}
+.form-control {
+  border-color: #dfe6da;
+  border-radius: 8px;
+  padding: 12px 13px;
+  font-size: 0.9rem;
+}
+.form-control:focus {
+  border-color: #95b577;
+  box-shadow: 0 0 0 3px #a9c98d25;
+}
+.form-control::placeholder {
+  color: #a7afa1;
+}
+.field-note {
+  color: #929d89;
+  margin-top: 12px;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 27px;
+}
+.stat-total {
+  font-size: 2rem;
+  font-weight: 600;
+  margin-top: 25px;
+}
+.stat-total span {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: #89947e;
+}
+.click-chart {
+  height: 180px;
+  margin-top: 30px;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  position: relative;
+  border-bottom: 1px solid #dee7d6;
+}
+.chart-column {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  z-index: 1;
+}
+.chart-column > div {
+  width: 100%;
+  background: #9bc36e;
+  border-radius: 3px 3px 0 0;
+}
+.chart-grid {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to top,
+    transparent 0px,
+    transparent 44px,
+    #edf1e7 44px,
+    #edf1e7 45px
+  );
+}
+.chart-labels {
+  display: flex;
+  justify-content: space-between;
+  color: #8f9b84;
+  margin-top: 9px;
+}
+details {
+  font-size: 0.8rem;
+  color: #68814f;
+  margin-top: 22px;
+}
+.daily-data {
+  max-height: 200px;
+  overflow: auto;
+  margin-top: 12px;
+}
+.toast-message {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #213c2c;
+  color: white;
+  padding: 16px 23px;
+  border-radius: 12px;
+  box-shadow: 0 6px 35px #12302130;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.85rem;
+  max-width: 90vw;
+}
+.toast-message svg {
+  color: var(--lime);
+  flex-shrink: 0;
+}

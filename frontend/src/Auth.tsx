@@ -33,37 +33,33 @@ export default function Auth({ done }: { done: (user: User) => void }) {
       <div className="auth-story">
         <Brand />
         <div>
-          <span className="eyebrow">FEWER CHARACTERS. MORE CONNECTIONS.</span>
+          <span className="eyebrow">SHORTEN. SHARE. TRACK.</span>
           <h1>
-            Every great connection
+            Cut the long link.
             <br />
-            starts with
-            <br />
-            <span>one small link.</span>
+            <span>Keep the connection.</span>
           </h1>
           <p>
-            A little space to shorten your links,
-            <br />
-            share your ideas, and follow every visit.
+            Turn long URLs into short links you can manage, share, and measure.
           </p>
           <div className="auth-link">
             <Link2 size={24} />
             <span>
-              cutlink / <strong>your next idea</strong>
+              /r/<strong>your-custom-link</strong>
             </span>
             <CheckCircle2 size={21} />
           </div>
         </div>
-        <small>Simple from the very first link.</small>
+        <small>Short links. Clear insights.</small>
       </div>
       <main className="auth-form-wrap">
         <form onSubmit={submit} className="auth-form">
-          <span className="eyebrow">YOUR LITTLE CORNER OF THE INTERNET</span>
-          <h2>{register ? "Make room for more" : "Welcome back"}</h2>
+          <span className="eyebrow">YOUR LINK WORKSPACE</span>
+          <h2>{register ? "Create your account" : "Welcome back"}</h2>
           <p>
             {register
-              ? "Create an account. Give your links a home."
-              : "Sign in and pick up where you left off."}
+              ? "Save your links and track their clicks in one place."
+              : "Sign in to manage your links and view their clicks."}
           </p>
           {error && (
             <div role="alert" className="alert alert-danger">
@@ -97,7 +93,7 @@ export default function Auth({ done }: { done: (user: User) => void }) {
             {busy ? "Please wait…" : register ? "Create account" : "Sign in"}
           </button>
           <div className="auth-switch">
-            {register ? "Already have an account?" : "New around here?"}{" "}
+            {register ? "Already have an account?" : "Don’t have an account?"}{" "}
             <button
               type="button"
               onClick={() => {
@@ -109,7 +105,8 @@ export default function Auth({ done }: { done: (user: User) => void }) {
             </button>
           </div>
           <p className="auth-footnote">
-            <Check size={15} /> Your links stay private in your account.
+            <Check size={15} /> Only you can manage your links. Short links are
+            public.
           </p>
         </form>
       </main>

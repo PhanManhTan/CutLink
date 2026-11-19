@@ -1,13 +1,16 @@
 import logging
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import auth, health, links
 from app.auth import current_user
 from app.config import get_settings
+from app.not_found import unavailable_link
 from app.schemas import UserOut
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -20,6 +23,13 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def missing_short_link(request: Request, exc: StarletteHTTPException):
+    if exc.status_code == 404 and request.url.path.startswith("/r/"):
+        return unavailable_link()
+    return await http_exception_handler(request, exc)
 
 
 @app.middleware("http")

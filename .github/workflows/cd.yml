@@ -1,0 +1,207 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: 'Successful CI run ID for a push to the current main commit'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+# A newer CI run cannot interrupt migration, service replacement or an S3 index upload.
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Verify successful main CI and select exact artifacts
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      allowed: ${{ steps.source.outputs.allowed }}
+      sha: ${{ steps.source.outputs.sha }}
+      run_id: ${{ steps.source.outputs.run_id }}
+    steps:
+      - uses: actions/github-script@v7
+        id: source
+        env:
+          CI_RUN_ID: ${{ github.event.workflow_run.id || inputs.ci_run_id }}
+        with:
+          script: |
+            const id = Number(process.env.CI_RUN_ID);
+            if (!Number.isSafeInteger(id) || id <= 0) throw new Error('A valid CI run ID is required');
+            const {data: run} = await github.rest.actions.getWorkflowRun({...context.repo, run_id: id});
+            const {data: repo} = await github.rest.repos.get(context.repo);
+            if (run.name !== 'CI' || run.path.split('@')[0] !== '.github/workflows/ci.yml' ||
+                run.event !== 'push' || run.head_branch !== 'main' ||
+                run.head_repository?.id !== repo.id || run.status !== 'completed' || run.conclusion !== 'success') {
+              throw new Error('CD only accepts a successful CI push run from this repository main branch');
+            }
+            const {data: main} = await github.rest.git.getRef({...context.repo, ref: 'heads/main'});
+            if (main.object.sha !== run.head_sha) {
+              core.notice('Skipping superseded CI commit; waiting for CI on the current main commit');
+              core.setOutput('allowed', 'false');
+              return;
+            }
+            core.setOutput('allowed', 'true');
+            core.setOutput('sha', run.head_sha);
+            core.setOutput('run_id', String(id));
+
+  publish_backend:
+    name: Publish tested backend image to GHCR
+    needs: release
+    if: needs.release.outputs.allowed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.digest }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: backend-image-ci
+          path: backend-image
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.release.outputs.run_id }}
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote the CI image without rebuilding
+        id: image
+        env:
+          RELEASE_SHA: ${{ needs.release.outputs.sha }}
+        shell: bash
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          gunzip -c backend-image/backend-image.tar.gz | docker load
+          docker tag cutlink-backend:local "$image:$RELEASE_SHA"
+          docker tag cutlink-backend:local "$image:latest"
+          docker push "$image:$RELEASE_SHA"
+          docker push "$image:latest"
+          digest=$(docker image inspect "$image:$RELEASE_SHA" --format '{{json .RepoDigests}}' | jq -r --arg prefix "$image@" '.[] | select(startswith($prefix))' | head -n 1)
+          if [[ ! "$digest" =~ @sha256:[a-f0-9]{64}$ ]]; then echo 'Invalid published digest'; exit 1; fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$digest" > backend-image.txt
+          printf 'Published tested image: %s\n' "$digest" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify anonymous pull before stopping any ECS task
+        env:
+          IMAGE: ${{ steps.image.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/anonymous-docker"
+          docker --config "$RUNNER_TEMP/anonymous-docker" manifest inspect "$IMAGE" > /dev/null || {
+            echo '::error::Make the GHCR package public, then rerun this job. ECS has not been changed.'
+            exit 1
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-image
+          path: backend-image.txt
+          if-no-files-found: ignore
+
+  deploy_backend:
+    name: Migrate and deploy new image to Fargate
+    needs: [release, publish_backend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.sha }}
+      - name: Validate backend AWS configuration
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          BASE_STACK_NAME: ${{ vars.BASE_STACK_NAME }}
+          APP_STACK_NAME: ${{ vars.APP_STACK_NAME }}
+        run: |
+          for name in AWS_REGION AWS_ROLE_ARN BASE_STACK_NAME APP_STACK_NAME; do
+            if [ -z "${!name}" ]; then echo "::error::Set production variable $name"; exit 1; fi
+          done
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: cutlink-backend-${{ github.run_id }}
+      - name: Release the published digest (no Docker build or infrastructure creation)
+        env:
+          IMAGE: ${{ needs.publish_backend.outputs.image }}
+          BASE_STACK_NAME: ${{ vars.BASE_STACK_NAME }}
+          APP_STACK_NAME: ${{ vars.APP_STACK_NAME }}
+        run: python scripts/release_fargate.py --base-stack "$BASE_STACK_NAME" --app-stack "$APP_STACK_NAME" --image "$IMAGE"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fargate-release-state
+          path: .deploy/fargate-release.json
+          if-no-files-found: ignore
+
+  publish_frontend:
+    name: Publish tested frontend to S3 after backend is healthy
+    needs: [release, deploy_backend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      FRONTEND_BUCKET: ${{ vars.FRONTEND_BUCKET }}
+      CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.sha }}
+      - name: Validate frontend AWS configuration
+        run: |
+          for name in AWS_REGION AWS_ROLE_ARN FRONTEND_BUCKET; do
+            if [ -z "${!name}" ]; then echo "::error::Set production variable $name"; exit 1; fi
+          done
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-dist
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.release.outputs.run_id }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: cutlink-frontend-${{ github.run_id }}
+      - name: Upload assets first and index last
+        run: |
+          aws s3 sync frontend-dist/assets "s3://$FRONTEND_BUCKET/assets" --cache-control 'public,max-age=31536000,immutable' --only-show-errors
+          aws s3 cp frontend-dist/ "s3://$FRONTEND_BUCKET/" --recursive --exclude 'assets/*' --exclude 'index.html' --cache-control 'no-cache' --only-show-errors
+          aws s3 cp frontend-dist/index.html "s3://$FRONTEND_BUCKET/index.html" --cache-control 'no-cache' --content-type 'text/html' --only-show-errors
+      - name: Invalidate CloudFront
+        if: env.CLOUDFRONT_DISTRIBUTION_ID != ''
+        run: |
+          id=$(aws cloudfront create-invalidation --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --paths '/index.html' --query 'Invalidation.Id' --output text)
+          aws cloudfront wait invalidation-completed --distribution-id "$CLOUDFRONT_DISTRIBUTION_ID" --id "$id"
+      - name: Smoke test the deployed app
+        if: vars.SITE_URL != ''
+        shell: pwsh
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: ./scripts/smoke.ps1 -BaseUrl $env:SITE_URL

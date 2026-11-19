@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Cutlink network, database, edge, storage, roles and logs (demo environment)
+Description: Cutlink ALB, single-task Fargate, Single-AZ RDS, private S3 and CloudFront
 
 Parameters:
   ProjectName:
@@ -9,6 +9,10 @@ Parameters:
   DatabaseClass:
     Type: String
     Default: db.t4g.micro
+  CloudFrontPrefixListId:
+    Type: String
+    AllowedPattern: 'pl-[a-f0-9]+'
+    Description: Regional com.amazonaws.global.cloudfront.origin-facing managed prefix list
 
 Resources:
   Vpc:
@@ -29,24 +33,31 @@ Resources:
       VpcId: !Ref Vpc
       CidrBlock: 10.42.0.0/24
       AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub '${ProjectName}-public-a'}]
+  # ALB requires a public subnet in each of two different AZs.
   PublicB:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref Vpc
       CidrBlock: 10.42.1.0/24
       AvailabilityZone: !Select [1, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub '${ProjectName}-public-b'}]
   PrivateA:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref Vpc
       CidrBlock: 10.42.10.0/24
       AvailabilityZone: !Select [0, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub '${ProjectName}-private-primary'}]
+  # RDS requires two AZs in its subnet group even for one Single-AZ database.
+  # No application task or standby database is placed in this subnet.
   PrivateB:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref Vpc
       CidrBlock: 10.42.11.0/24
       AvailabilityZone: !Select [1, !GetAZs '']
+      Tags: [{Key: Name, Value: !Sub '${ProjectName}-private-rds-fallback'}]
   PublicRoutes:
     Type: AWS::EC2::RouteTable
     Properties: {VpcId: !Ref Vpc}
@@ -90,23 +101,38 @@ Resources:
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Public HTTP origin; listener also requires CloudFront secret
+      GroupDescription: CloudFront origin-facing connections only
       VpcId: !Ref Vpc
-      SecurityGroupIngress: [{IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0}]
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 80, ToPort: 80, SourcePrefixListId: !Ref CloudFrontPrefixListId}
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 8000, ToPort: 8000, CidrIp: 10.42.10.0/24}
   TaskSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Only ALB reaches the API; Redis stays inside the task
+      GroupDescription: Only ALB reaches the API
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - {IpProtocol: tcp, FromPort: 8000, ToPort: 8000, SourceSecurityGroupId: !Ref AlbSecurityGroup}
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0}
+        - {IpProtocol: tcp, FromPort: 5432, ToPort: 5432, DestinationSecurityGroupId: !Ref DatabaseSecurityGroup}
   DatabaseSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: PostgreSQL from ECS only
       VpcId: !Ref Vpc
-      SecurityGroupIngress:
-        - {IpProtocol: tcp, FromPort: 5432, ToPort: 5432, SourceSecurityGroupId: !Ref TaskSecurityGroup}
+      # No outbound connections; stateful replies to PostgreSQL clients remain allowed.
+      SecurityGroupEgress:
+        - {IpProtocol: tcp, FromPort: 1, ToPort: 1, CidrIp: 127.0.0.1/32}
+  DatabaseIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref TaskSecurityGroup
   DatabaseSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -141,6 +167,7 @@ Resources:
     Properties:
       Engine: postgres
       EngineVersion: '17'
+      AvailabilityZone: !Select [0, !GetAZs '']
       DBInstanceClass: !Ref DatabaseClass
       DBName: cutlink
       MasterUsername: cutlink
@@ -215,6 +242,7 @@ Resources:
       TargetType: ip
       Protocol: HTTP
       Port: 8000
+      HealthCheckProtocol: HTTP
       HealthCheckPath: /api/health/ready
       HealthCheckIntervalSeconds: 30
       HealthCheckTimeoutSeconds: 5
@@ -394,7 +422,7 @@ Resources:
 
 Outputs:
   VpcId: {Value: !Ref Vpc}
-  PrivateSubnets: {Value: !Join [',', [!Ref PrivateA, !Ref PrivateB]], Export: {Name: !Sub '${AWS::StackName}-PrivateSubnets'}}
+  PrivateSubnets: {Value: !Ref PrivateA, Export: {Name: !Sub '${AWS::StackName}-PrivateSubnets'}}
   TaskSecurityGroup: {Value: !Ref TaskSecurityGroup, Export: {Name: !Sub '${AWS::StackName}-TaskSecurityGroup'}}
   ClusterArn: {Value: !GetAtt Cluster.Arn, Export: {Name: !Sub '${AWS::StackName}-ClusterArn'}}
   ExecutionRoleArn: {Value: !GetAtt ExecutionRole.Arn, Export: {Name: !Sub '${AWS::StackName}-ExecutionRoleArn'}}

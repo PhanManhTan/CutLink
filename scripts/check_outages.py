@@ -1,22 +1,28 @@
-"""Stop real Compose dependencies and verify redirect/readiness fallback and recovery."""
+"""Verify PostgreSQL outage/recovery against the local Compose stack."""
 
 import argparse
 import subprocess
 import time
-import uuid
+import urllib.error
+import urllib.request
 from pathlib import Path
-
-from check_background import make_client
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://localhost:5173")
-    parser.add_argument(
-        "--wsl", action="store_true", help="Run Docker via wsl.exe from Windows"
-    )
+    parser.add_argument("--wsl", action="store_true")
     args = parser.parse_args()
-    request = make_client(args.base_url.rstrip("/"))
+
+    def status(path):
+        try:
+            with urllib.request.urlopen(
+                args.base_url.rstrip("/") + path, timeout=7
+            ) as response:
+                return response.status
+        except urllib.error.HTTPError as error:
+            error.close()
+            return error.code
 
     def compose(*arguments):
         command = (["wsl", "-e"] if args.wsl else []) + [
@@ -26,49 +32,17 @@ def main():
         ]
         subprocess.run(command, check=True, cwd=Path(__file__).resolve().parent.parent)
 
-    status, _, _ = request(
-        "/api/auth/register",
-        "POST",
-        {
-            "email": f"outage-{uuid.uuid4().hex}@example.com",
-            "password": uuid.uuid4().hex,
-        },
-    )
-    assert status == 201
-    status, _, link = request(
-        "/api/links",
-        "POST",
-        {
-            "name": "Outage fallback",
-            "target_url": "https://example.com/fallback",
-        },
-    )
-    assert status == 201
     try:
-        compose("stop", "redis")
-        start = time.monotonic()
-        status, headers, _ = request(f"/r/{link['code']}")
-        assert status == 302 and headers["Location"] == "https://example.com/fallback"
-        assert time.monotonic() - start < 2, "Failed Redis blocked the redirect"
-        assert request("/api/health/ready")[0] == 200
-        compose("start", "redis")
         compose("stop", "db")
-        assert request("/api/health/live")[0] == 200
+        assert status("/api/health/live") == 200
         start = time.monotonic()
-        assert request("/api/health/ready")[0] == 503
-        assert time.monotonic() - start < 5, "Readiness exceeded database deadlines"
-        compose("start", "db")
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            if request("/api/health/ready")[0] == 200:
-                print("Redis fallback, SQL outage and SQL recovery all passed.")
-                break
-            time.sleep(1)
-        else:
-            raise AssertionError("Database readiness did not recover")
+        assert status("/api/health/ready") == 503
+        assert time.monotonic() - start < 5
+        assert status("/r/database-outage-check") == 503
     finally:
-        compose("start", "db", "redis")
-        request(f"/api/links/{link['id']}", "DELETE")
+        compose("up", "-d", "--wait", "--wait-timeout", "30", "db")
+    assert status("/api/health/ready") == 200
+    print("SQL outage: live=200, ready/redirect=503; readiness recovers to 200.")
 
 
 if __name__ == "__main__":

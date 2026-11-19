@@ -31,9 +31,14 @@ try {
 
         $baseName = "$ProjectName-base"
         $appName = "$ProjectName-app"
+        $prefixLists = Get-AwsJson @('ec2', 'describe-managed-prefix-lists', '--filters',
+            'Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing')
+        $cloudFrontPrefixes = @($prefixLists.PrefixLists)
+        if ($cloudFrontPrefixes.Count -ne 1) { throw 'CloudFront origin-facing prefix list is unavailable in this region.' }
+        $cloudFrontPrefixListId = $cloudFrontPrefixes[0].PrefixListId
         Invoke-Native aws @('cloudformation', 'deploy', '--stack-name', $baseName,
             '--template-file', 'infra/base.yaml', '--capabilities', 'CAPABILITY_IAM',
-            '--parameter-overrides', "ProjectName=$ProjectName", '--no-fail-on-empty-changeset')
+            '--parameter-overrides', "ProjectName=$ProjectName", "CloudFrontPrefixListId=$cloudFrontPrefixListId", '--no-fail-on-empty-changeset')
         $base = Get-StackOutputs $baseName
 
         $tag = "${ImageRepository}:$sha"
@@ -54,7 +59,8 @@ try {
         $previous = $null
         if ($existing.Count -gt 0) {
             $old = Get-StackOutputs $appName
-            $task = Get-AwsJson @('ecs', 'describe-task-definition', '--task-definition', $old.ApplicationTaskArn)
+            $oldService = Get-AwsJson @('ecs', 'describe-services', '--cluster', $base.ClusterArn, '--services', $old.ServiceName)
+            $task = Get-AwsJson @('ecs', 'describe-task-definition', '--task-definition', $oldService.services[0].taskDefinition)
             $previousImage = @($task.taskDefinition.containerDefinitions | Where-Object name -eq 'api')[0].image
             $versions = Get-AwsJson @('s3api', 'list-object-versions', '--bucket', $base.FrontendBucket, '--prefix', 'index.html')
             $indexVersion = $null
@@ -68,13 +74,12 @@ try {
                 capturedAt = [DateTime]::UtcNow.ToString('o')
             }
             $previousFile = Join-Path $stateDirectory 'previous-release.json'
-            $oldService = Get-AwsJson @('ecs', 'describe-services', '--cluster', $base.ClusterArn, '--services', $old.ServiceName)
             # A rerun after migration failure sees the failed task definition and desired=0.
             # Preserve the captured running release instead of replacing it with that failed image.
             if ($oldService.services[0].runningCount -gt 0 -or -not (Test-Path -LiteralPath $previousFile)) {
                 $previous | ConvertTo-Json | Set-Content $previousFile
             }
-            # Stop the old service BEFORE switching task definitions; also stops the old Beat.
+            # Stop the old service before switching task definitions.
             Invoke-Native aws @('ecs', 'update-service', '--cluster', $base.ClusterArn,
                 '--service', $old.ServiceName, '--desired-count', '0')
             Wait-ServiceStopped $base.ClusterArn $old.ServiceName

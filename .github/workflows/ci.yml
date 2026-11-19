@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: ['main', 'feat/**']
   pull_request:
+    branches: ['main']
   workflow_dispatch:
 
 permissions:
@@ -33,15 +34,8 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U cutlink -d cutlink_test"
           --health-interval 5s --health-timeout 3s --health-retries 12
-      redis:
-        image: redis:7-alpine
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s --health-timeout 2s --health-retries 10
     env:
       TEST_DATABASE_URL: postgresql+psycopg://cutlink:cutlink-local-only@localhost:5432/cutlink_test
-      REDIS_URL: redis://localhost:6379/0
       JWT_SECRET: ci-test-secret-only-never-use-in-production-12345
       COOKIE_SECURE: 'false'
       ALLOWED_ORIGINS: '["http://testserver"]'
@@ -62,6 +56,8 @@ jobs:
           .venv/bin/python -m pip check
       - name: Check Python
         run: .venv/bin/python -m ruff check app migrations tests ../scripts
+      - name: Test Fargate release gates without AWS credentials
+        run: .venv/bin/python -m unittest discover -s ../scripts/tests -v
       - name: PostgreSQL integration tests (migrations run twice)
         run: .venv/bin/python -m pytest -q --junitxml=test-results.xml
       - name: Upload test results
@@ -87,6 +83,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - run: npm run test:run
       - run: npm run build
       - uses: actions/upload-artifact@v4
         with:
@@ -104,7 +101,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install 'cfn-lint==1.60.1'
-      - run: cfn-lint infra/base.yaml infra/app.yaml
+      - run: cfn-lint infra/base.yaml infra/app.yaml infra/github-actions.yaml
       - name: Validate PowerShell scripts
         shell: pwsh
         run: |
@@ -140,10 +137,17 @@ jobs:
       - name: HTTP smoke checks via frontend origin
         shell: pwsh
         run: ./scripts/smoke.ps1 -BaseUrl http://localhost:5173
-      - name: Verify real worker and Beat process a click
-        run: python scripts/check_background.py --base-url http://localhost:5173
-      - name: Verify Redis and PostgreSQL outages and recovery
+      - name: Verify PostgreSQL outage and recovery
         run: python scripts/check_outages.py --base-url http://localhost:5173
+      - name: Export the tested backend image for CD
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker save cutlink-backend:local | gzip > backend-image.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: backend-image-ci
+          path: backend-image.tar.gz
+          retention-days: 7
       - name: Capture container state and logs
         if: always()
         run: |

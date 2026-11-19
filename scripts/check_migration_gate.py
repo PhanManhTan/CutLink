@@ -16,7 +16,7 @@ def main():
             text=True,
         )
 
-    compose("stop", "api", "frontend", "worker", "beat")
+    compose("stop", "api", "frontend")
     try:
         result = compose(
             "-f",

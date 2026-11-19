@@ -42,18 +42,26 @@ try {
     Assert-Status (Request '/api/auth/logout' 'POST') 204 'Logout'
     Assert-Status (Request '/api/auth/login' 'POST' @{email = $email; password = $password}) 200 'Login'
     Assert-Status (Request '/api/auth/me') 200 'Session cookie round trip'
-    $create = Request '/api/links' 'POST' @{name = 'Smoke test'; target_url = 'https://example.com/?cutlink=smoke'}
+    $customCode = "smoke-$([Guid]::NewGuid().ToString('N'))"
+    Assert-Status (Request '/api/links' 'POST' @{name = 'Invalid URL'; target_url = 'javascript:alert(1)'}) 422 'URL validation'
+    $create = Request '/api/links' 'POST' @{name = 'Smoke test'; target_url = 'https://example.com/?cutlink=smoke'; custom_code = $customCode}
     Assert-Status $create 201 'Create'
     $link = $create.Content | ConvertFrom-Json
     $linkId = $link.id
+    if ($link.code -ne $customCode) { throw 'Custom ending was not preserved' }
+    Assert-Status (Request '/api/links' 'POST' @{name = 'Duplicate ending'; target_url = 'https://example.com'; custom_code = $customCode}) 409 'Custom ending uniqueness'
     $redirect = Request "/r/$($link.code)"
     Assert-Status $redirect 302 'Redirect'
     Assert-Uncached $redirect
+    $stats = (Request "/api/links/$linkId/stats").Content | ConvertFrom-Json
+    if ($stats.total_clicks -ne 1 -or ($stats.days | Measure-Object clicks -Sum).Sum -ne 1) {
+        throw 'Click statistics were not committed before redirect'
+    }
     if (($redirect.Headers.Location -join '') -ne 'https://example.com/?cutlink=smoke') { throw 'Wrong redirect destination' }
     Assert-Status (Request "/api/links/$linkId" 'PATCH' @{target_url = 'https://example.org/updated'}) 200 'Update'
     $updated = Request "/r/$($link.code)"
     Assert-Status $updated 302 'Updated redirect'
-    if (($updated.Headers.Location -join '') -ne 'https://example.org/updated') { throw 'Stale redirect cache' }
+    if (($updated.Headers.Location -join '') -ne 'https://example.org/updated') { throw 'Wrong updated redirect destination' }
     Assert-Status (Request "/api/links/$linkId" 'PATCH' @{enabled = $false}) 200 'Pause'
     Assert-Status (Request "/r/$($link.code)") 404 'Paused redirect'
     Assert-Status (Request "/api/links/$linkId/stats") 200 'Statistics'
