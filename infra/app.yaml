@@ -1,0 +1,171 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Cutlink Fargate application and separate one-shot migration task
+
+Parameters:
+  BaseStackName:
+    Type: String
+  BackendImage:
+    Type: String
+    AllowedPattern: 'ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}'
+    Description: Public GHCR image pinned by immutable digest
+  AppOrigin:
+    Type: String
+    AllowedPattern: 'https://[a-z0-9]+\.cloudfront\.net'
+  DesiredCount:
+    Type: Number
+    Default: 0
+    AllowedValues: [0, 1]
+
+Resources:
+  ApplicationTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      Cpu: '256'
+      Memory: '1024'
+      NetworkMode: awsvpc
+      RuntimePlatform: {CpuArchitecture: X86_64, OperatingSystemFamily: LINUX}
+      ExecutionRoleArn: {Fn::ImportValue: !Sub '${BaseStackName}-ExecutionRoleArn'}
+      TaskRoleArn: {Fn::ImportValue: !Sub '${BaseStackName}-TaskRoleArn'}
+      ContainerDefinitions:
+        - Name: api
+          Image: !Ref BackendImage
+          Essential: true
+          MemoryReservation: 256
+          PortMappings: [{ContainerPort: 8000, Protocol: tcp}]
+          Environment:
+            - {Name: DB_HOST, Value: {Fn::ImportValue: !Sub '${BaseStackName}-DatabaseHost'}}
+            - {Name: DB_NAME, Value: cutlink}
+            - {Name: DB_USER, Value: cutlink}
+            - {Name: REDIS_URL, Value: 'redis://localhost:6379/0'}
+            - {Name: COOKIE_SECURE, Value: 'true'}
+            - {Name: ALLOWED_ORIGINS, Value: !Sub '["${AppOrigin}"]'}
+          Secrets:
+            - Name: DB_PASSWORD
+              ValueFrom: !Join ['', [{Fn::ImportValue: !Sub '${BaseStackName}-DatabaseSecretArn'}, ':password::']]
+            - {Name: JWT_SECRET, ValueFrom: {Fn::ImportValue: !Sub '${BaseStackName}-JwtSecretArn'}}
+          HealthCheck:
+            Command: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/live', timeout=2)"]
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 30
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: {Fn::ImportValue: !Sub '${BaseStackName}-LogGroup'}
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: api
+        - Name: redis
+          Image: redis:7-alpine
+          Essential: false
+          Memory: 192
+          MemoryReservation: 96
+          Command: [redis-server, --save, '', --appendonly, 'no', --maxmemory, 128mb, --maxmemory-policy, noeviction]
+          HealthCheck:
+            Command: [CMD, redis-cli, ping]
+            Interval: 10
+            Timeout: 2
+            Retries: 3
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: {Fn::ImportValue: !Sub '${BaseStackName}-LogGroup'}
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: redis
+        - Name: worker
+          Image: !Ref BackendImage
+          Essential: false
+          MemoryReservation: 192
+          DependsOn: [{ContainerName: redis, Condition: HEALTHY}]
+          Command: [celery, -A, 'app.tasks:celery', worker, '--pool=solo', '--concurrency=1', '--loglevel=INFO']
+          Environment:
+            - {Name: DB_HOST, Value: {Fn::ImportValue: !Sub '${BaseStackName}-DatabaseHost'}}
+            - {Name: DB_NAME, Value: cutlink}
+            - {Name: DB_USER, Value: cutlink}
+            - {Name: REDIS_URL, Value: 'redis://localhost:6379/0'}
+          Secrets:
+            - Name: DB_PASSWORD
+              ValueFrom: !Join ['', [{Fn::ImportValue: !Sub '${BaseStackName}-DatabaseSecretArn'}, ':password::']]
+            - {Name: JWT_SECRET, ValueFrom: {Fn::ImportValue: !Sub '${BaseStackName}-JwtSecretArn'}}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: {Fn::ImportValue: !Sub '${BaseStackName}-LogGroup'}
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: worker
+        - Name: beat
+          Image: !Ref BackendImage
+          Essential: false
+          MemoryReservation: 96
+          DependsOn: [{ContainerName: redis, Condition: HEALTHY}]
+          Command: [celery, -A, 'app.tasks:celery', beat, '--loglevel=INFO', '--schedule=/tmp/celerybeat-schedule']
+          Environment:
+            - {Name: DB_HOST, Value: {Fn::ImportValue: !Sub '${BaseStackName}-DatabaseHost'}}
+            - {Name: REDIS_URL, Value: 'redis://localhost:6379/0'}
+          Secrets:
+            - Name: DB_PASSWORD
+              ValueFrom: !Join ['', [{Fn::ImportValue: !Sub '${BaseStackName}-DatabaseSecretArn'}, ':password::']]
+            - {Name: JWT_SECRET, ValueFrom: {Fn::ImportValue: !Sub '${BaseStackName}-JwtSecretArn'}}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: {Fn::ImportValue: !Sub '${BaseStackName}-LogGroup'}
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: beat
+  MigrationTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      Cpu: '256'
+      Memory: '1024'
+      NetworkMode: awsvpc
+      RuntimePlatform: {CpuArchitecture: X86_64, OperatingSystemFamily: LINUX}
+      ExecutionRoleArn: {Fn::ImportValue: !Sub '${BaseStackName}-ExecutionRoleArn'}
+      TaskRoleArn: {Fn::ImportValue: !Sub '${BaseStackName}-TaskRoleArn'}
+      ContainerDefinitions:
+        - Name: migration
+          Image: !Ref BackendImage
+          Essential: true
+          Command: [alembic, upgrade, head]
+          Environment:
+            - {Name: DB_HOST, Value: {Fn::ImportValue: !Sub '${BaseStackName}-DatabaseHost'}}
+            - {Name: DB_NAME, Value: cutlink}
+            - {Name: DB_USER, Value: cutlink}
+          Secrets:
+            - Name: DB_PASSWORD
+              ValueFrom: !Join ['', [{Fn::ImportValue: !Sub '${BaseStackName}-DatabaseSecretArn'}, ':password::']]
+            - {Name: JWT_SECRET, ValueFrom: {Fn::ImportValue: !Sub '${BaseStackName}-JwtSecretArn'}}
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: {Fn::ImportValue: !Sub '${BaseStackName}-LogGroup'}
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: migration
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: {Fn::ImportValue: !Sub '${BaseStackName}-ClusterArn'}
+      LaunchType: FARGATE
+      PlatformVersion: '1.4.0'
+      TaskDefinition: !Ref ApplicationTask
+      DesiredCount: !Ref DesiredCount
+      HealthCheckGracePeriodSeconds: 120
+      DeploymentConfiguration:
+        MaximumPercent: 100
+        MinimumHealthyPercent: 0
+        DeploymentCircuitBreaker: {Enable: true, Rollback: true}
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Split [',', {Fn::ImportValue: !Sub '${BaseStackName}-PrivateSubnets'}]
+          SecurityGroups: [{Fn::ImportValue: !Sub '${BaseStackName}-TaskSecurityGroup'}]
+      LoadBalancers:
+        - ContainerName: api
+          ContainerPort: 8000
+          TargetGroupArn: {Fn::ImportValue: !Sub '${BaseStackName}-TargetGroupArn'}
+
+Outputs:
+  ApplicationTaskArn: {Value: !Ref ApplicationTask}
+  MigrationTaskArn: {Value: !Ref MigrationTask}
+  ServiceName: {Value: !GetAtt Service.Name}

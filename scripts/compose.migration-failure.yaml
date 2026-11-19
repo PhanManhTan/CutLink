@@ -1,0 +1,4 @@
+# Test override: an invalid revision must prevent API startup.
+services:
+  migrate:
+    command: [alembic, upgrade, revision-that-does-not-exist]
