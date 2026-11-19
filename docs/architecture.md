@@ -4,7 +4,27 @@
 Browser → FastAPI → PostgreSQL
 ```
 
-Locally, Vite serves React and proxies API/redirect requests. On AWS, CloudFront serves private S3 assets and sends `/api/*` and `/r/*` to ALB/Fargate. The application task contains one API container (0.25 vCPU / 512 MB).
+Locally, Vite serves React and proxies API/redirect requests. On AWS:
+
+```text
+User → CloudFront ┬→ private S3 (frontend, OAC)
+                  └→ ALB → Fargate API → RDS PostgreSQL
+```
+
+The minimal ALB/RDS network has two public and two private subnets across two AZs. The API and database run in the primary AZ:
+
+| Subnet | AZ | Resources |
+| --- | --- | --- |
+| PublicA | Primary | ALB node and one NAT gateway |
+| PublicB | Secondary | ALB node; required by ALB |
+| PrivateA | Primary | One API task and one Single-AZ RDS instance |
+| PrivateB | Secondary | Empty; required by the RDS DB subnet group |
+
+The API task uses 0.25 vCPU / 512 MB and has no public IP. A separate migration task runs only during releases. Both tasks use PrivateA. PrivateB has no task or standby database. There is no autoscaling, read replica or second NAT gateway. This is not a highly available application deployment.
+
+ALB accepts port 80 only from the regional CloudFront origin-facing managed prefix list. Its listener forwards requests only when `X-Cutlink-Origin` matches this distribution's secret; other requests receive 403. The API accepts port 8000 only from ALB. PostgreSQL accepts port 5432 only from the task security group. Tasks use one NAT gateway for outbound HTTPS, including pulling the public GHCR image.
+
+CloudFront serves static files with caching; API and redirect behaviors disable caching. CloudFront-to-ALB uses HTTP in this minimal setup; viewer-to-CloudFront uses HTTPS. See [AWS setup](aws.md) for the separate CloudFront Free plan enrollment step.
 
 ## Clicks
 
@@ -31,4 +51,4 @@ The active data model is users, links and click_events. Earlier migrations retai
 - Passwords use Argon2. Login uses an eight-hour HttpOnly, SameSite=Lax JWT cookie, Secure on AWS. Mutations require an allowed Origin. Logout clears the cookie; there is no token revocation table.
 - Single-task Fargate and Single-AZ RDS accept deployment downtime. Infrastructure and release operations are described in [AWS setup](aws.md).
 
-References: [SQLAlchemy transactions](https://docs.sqlalchemy.org/en/20/orm/session_transaction.html), [FastAPI dependencies](https://fastapi.tiangolo.com/tutorial/dependencies/), [ECS health checks](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/healthcheck.html).
+References: [ALB subnet requirements](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/application-load-balancers.html), [RDS subnet requirements](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_VPC.WorkingWithRDSInstanceinaVPC.html), [SQLAlchemy transactions](https://docs.sqlalchemy.org/en/20/orm/session_transaction.html), [FastAPI dependencies](https://fastapi.tiangolo.com/tutorial/dependencies/).

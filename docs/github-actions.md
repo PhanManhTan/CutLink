@@ -38,7 +38,7 @@ Complete [AWS setup](aws.md). In **Repository Settings → Environments**, creat
 | `CLOUDFRONT_DISTRIBUTION_ID` | Base stack `DistributionId`; enables invalidation |
 | `SITE_URL` | Base stack `SiteUrl`; enables final smoke test |
 
-OIDC replaces long-lived AWS keys. The IAM template grants release access to the existing ECS service, task roles, bucket and distribution. It cannot create VPC/RDS infrastructure or read application secrets. Its default subject is:
+OIDC replaces long-lived AWS keys. The IAM template grants release access to the existing ECS service, task roles, bucket and distribution. It cannot create VPC/RDS infrastructure or directly call Secrets Manager. Its default subject is:
 
 ```text
 repo:PhanManhTan@150802908/CutLink@1464239414:environment:production
@@ -47,6 +47,18 @@ repo:PhanManhTan@150802908/CutLink@1464239414:environment:production
 If you customized the OIDC subject, set `RepositorySubject` to the exact issued value. The legacy name-only subject applies only if explicitly configured. See [GitHub OIDC with AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws).
 
 GHCR uses `GITHUB_TOKEN` with package write permission. An existing package must grant this repository Actions access. Make it public before the first Fargate release. See [GitHub container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+
+## IAM scope
+
+| Role | Allowed access |
+| --- | --- |
+| ECS execution | Write this app's logs and inject its DB and JWT secrets |
+| ECS task | No AWS API permissions; the application uses PostgreSQL directly |
+| GitHub release | Read the two stack outputs, register the two task families, update this service, run migration in this cluster, upload this S3 bucket and invalidate this distribution |
+
+`iam:PassRole` permits only the two task roles and only for ECS tasks. Task inspection/listing is restricted to the cluster. ELB `DescribeTargetHealth` requires `Resource: '*'` because AWS does not support resource-level permissions for that read-only action; it is restricted to the deployment region. GitHub cannot change IAM roles, network resources, database settings or pricing plans. Infrastructure bootstrap uses a separate local AWS identity.
+
+References: [ECS IAM actions](https://docs.aws.amazon.com/service-authorization/latest/reference/list_ecs.html), [ELB IAM actions](https://docs.aws.amazon.com/service-authorization/latest/reference/list_elbv2.html).
 
 ## Trigger or retry
 

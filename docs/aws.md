@@ -18,7 +18,15 @@ pwsh -File scripts/deploy.ps1 `
 
 The script creates base/app stacks, builds the initial image, migrates the database, starts Fargate, uploads frontend and checks the app. If the first GHCR push creates a private package, make it public and rerun. Anonymous-pull validation happens before replacing an existing service.
 
-The demo uses a NAT gateway, ALB, private Fargate, private PostgreSQL RDS, private S3 and CloudFront. These incur AWS charges while they exist. The first setup is slower than subsequent image releases.
+The script looks up the regional `com.amazonaws.global.cloudfront.origin-facing` managed prefix list and passes its ID to the base stack. If deploying the template yourself, supply `CloudFrontPrefixListId` using the same lookup:
+
+```powershell
+aws ec2 describe-managed-prefix-lists --filters Name=prefix-list-name,Values=com.amazonaws.global.cloudfront.origin-facing --query 'PrefixLists[0].PrefixListId' --output text --profile YOUR_PROFILE --region ap-southeast-1
+```
+
+The network uses two public subnets for ALB and two private subnets for RDS eligibility. One API task, one Single-AZ RDS instance and one NAT gateway run in the primary AZ. The second AZ has an ALB node and an empty private subnet; no standby DB or second API task. See [network details](architecture.md).
+
+NAT, ALB, Fargate, RDS, secrets and storage have their own AWS charges. The first setup is slower than subsequent image releases.
 
 Read the outputs:
 
@@ -28,6 +36,12 @@ aws cloudformation describe-stacks --stack-name cutlink-app --query 'Stacks[0].O
 ```
 
 Record base outputs `FrontendBucket`, `DistributionId`, `SiteUrl` and app output `ServiceName`.
+
+### CloudFront Free plan
+
+The template creates one standard distribution. CloudFormation does not enroll it in a flat-rate pricing plan. After bootstrap, open **CloudFront → Distributions → your distribution → pricing plan**, choose **Free** if eligible, and complete the required WAF association. Do not select a paid plan for this demo. Check eligibility and current allowances in the [AWS plan documentation](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/flat-rate-pricing-plan.html).
+
+This enrollment is separate from infrastructure deployment and CI/CD. Until enrolled, the distribution uses pay-as-you-go billing, subject to applicable free allowances. The CloudFront Free plan does not make the backend, database or NAT free.
 
 ## 2. Allow GitHub releases
 
@@ -76,6 +90,6 @@ Application rollback: download `fargate-release-state` from CD. Stop the service
 
 Frontend rollback: restore an earlier S3 index.html version and invalidate `/index.html`. Old hashed assets remain available.
 
-Delete stacks in order: `cutlink-github`, `cutlink-app`, `cutlink-base`. Wait for each deletion. The base retains a final RDS snapshot, S3 bucket and logs; record them before teardown. Retained storage continues to incur charges until explicitly removed.
+Delete stacks in order: `cutlink-github`, `cutlink-app`, `cutlink-base`. Cancel an attached CloudFront pricing plan before deleting its distribution. Wait for each deletion. The base retains a final RDS snapshot, S3 bucket and logs; record them before teardown. Retained storage continues to incur charges until explicitly removed.
 
 References: [CloudFormation stacks](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stacks.html), [ECS task definitions](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task_definitions.html), [ECS update-service](https://docs.aws.amazon.com/cli/latest/reference/ecs/update-service.html).

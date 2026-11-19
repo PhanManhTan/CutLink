@@ -40,13 +40,27 @@ Resources:
                   - arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:service/${ClusterName}/${ServiceName}
                   - ClusterName: !Select [1, !Split ['/', {Fn::ImportValue: !Sub '${BaseStackName}-ClusterArn'}]]
               - Effect: Allow
-                Action: ecs:DescribeTaskDefinition
+                Action: [ecs:DescribeTaskDefinition, ecs:RegisterTaskDefinition]
                 Resource:
                   - !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${AppStackName}-application:*
                   - !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${AppStackName}-migration:*
               - Effect: Allow
-                Action: [ecs:RegisterTaskDefinition, ecs:ListTasks, ecs:DescribeTasks, elasticloadbalancing:DescribeTargetHealth]
+                Action: ecs:DescribeTasks
+                Resource: !Sub
+                  - arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/${ClusterName}/*
+                  - ClusterName: !Select [1, !Split ['/', {Fn::ImportValue: !Sub '${BaseStackName}-ClusterArn'}]]
+              - Effect: Allow
+                Action: ecs:ListTasks
                 Resource: '*'
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: {Fn::ImportValue: !Sub '${BaseStackName}-ClusterArn'}
+              # This read-only ELB action does not support resource-level permissions.
+              - Effect: Allow
+                Action: elasticloadbalancing:DescribeTargetHealth
+                Resource: '*'
+                Condition:
+                  StringEquals: {aws:RequestedRegion: !Ref 'AWS::Region'}
               - Effect: Allow
                 Action: ecs:RunTask
                 Resource: !Sub arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${AppStackName}-migration:*

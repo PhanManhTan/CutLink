@@ -10,7 +10,7 @@ React + Vite + TypeScript + Bootstrap · FastAPI + PostgreSQL + Alembic
 
 ![Cutlink AWS architecture](docs/assets/architecture.gif)
 
-See [architecture and limits](docs/architecture.md) for details.
+CloudFront + private S3, ALB, one Fargate API and one RDS PostgreSQL instance. See [architecture and limits](docs/architecture.md).
 
 ## Run locally
 

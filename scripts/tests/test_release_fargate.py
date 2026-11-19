@@ -36,7 +36,7 @@ class ReleaseTests(unittest.TestCase):
                     "ClusterArn": "cluster",
                     "ServiceName": "service",
                     "MigrationTaskArn": "migration:1",
-                    "PrivateSubnets": "subnet-a,subnet-b",
+                    "PrivateSubnets": "subnet-a",
                     "TaskSecurityGroup": "sg-task",
                     "TargetGroupArn": "target",
                 }
