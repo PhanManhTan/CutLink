@@ -1,4 +1,3 @@
-import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
@@ -6,16 +5,13 @@ from unittest.mock import patch
 import jwt
 import pytest
 from fastapi.testclient import TestClient
-from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 
-from app import cache
 from app.auth import settings
 from app.database import SessionLocal
 from app.main import app
-from app.models import ClickEvent, DailyLinkStat
-from app.tasks import aggregate_clicks, record_click
+from app.models import ClickEvent
 
 
 def test_auth_cookie_and_duplicate_email(client):
@@ -92,30 +88,28 @@ def test_user_isolation(logged_in, link):
 
 def test_crud_redirect_and_cache_invalidation(logged_in, link):
     path = f"/r/{link['code']}"
-    with patch("app.links.record_click.apply_async"):
-        assert len(link["code"]) == 8
-        response = logged_in.get(path, follow_redirects=False)
-        assert response.status_code == 302
-        assert response.headers["location"] == "https://example.com/work?ref=short"
-        assert response.headers["cache-control"] == "no-store"
-        updated = logged_in.patch(
-            f"/api/links/{link['id']}",
-            json={
-                "target_url": "https://example.org/new",
-                "name": "Renamed",
-            },
-        )
-        assert updated.status_code == 200
-        assert (
-            logged_in.get(path, follow_redirects=False).headers["location"]
-            == "https://example.org/new"
-        )
-        logged_in.patch(f"/api/links/{link['id']}", json={"enabled": False})
-        assert logged_in.get(path).status_code == 404
-        logged_in.patch(f"/api/links/{link['id']}", json={"enabled": True})
-        assert logged_in.get(path, follow_redirects=False).status_code == 302
-        assert logged_in.delete(f"/api/links/{link['id']}").status_code == 204
-        assert logged_in.get(path).status_code == 404
+    assert len(link["code"]) == 8
+    response = logged_in.get(path, follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://example.com/work?ref=short"
+    assert response.headers["cache-control"] == "no-store"
+    updated = logged_in.patch(
+        f"/api/links/{link['id']}",
+        json={
+            "target_url": "https://example.org/new",
+            "name": "Renamed",
+        },
+    )
+    assert updated.status_code == 200
+    assert (
+        logged_in.get(path, follow_redirects=False).headers["location"] == "https://example.org/new"
+    )
+    logged_in.patch(f"/api/links/{link['id']}", json={"enabled": False})
+    assert logged_in.get(path).status_code == 404
+    logged_in.patch(f"/api/links/{link['id']}", json={"enabled": True})
+    assert logged_in.get(path, follow_redirects=False).status_code == 302
+    assert logged_in.delete(f"/api/links/{link['id']}").status_code == 204
+    assert logged_in.get(path).status_code == 404
 
 
 def test_url_validation(logged_in):
@@ -165,26 +159,25 @@ def test_custom_ending_redirect_and_crud(logged_in, ending):
     assert response.status_code == 201
     link_id = response.json()["id"]
     assert response.json()["code"] == ending
-    with patch("app.links.record_click.apply_async"):
-        redirect = logged_in.get(f"/r/{ending}", follow_redirects=False)
-        assert redirect.status_code == 302
-        assert redirect.headers["location"] == "https://example.com/custom"
-        assert (
-            logged_in.patch(
-                f"/api/links/{link_id}",
-                json={
-                    "target_url": "https://example.org/changed",
-                },
-            ).status_code
-            == 200
-        )
-        assert logged_in.get(f"/r/{ending}", follow_redirects=False).headers["location"] == (
-            "https://example.org/changed"
-        )
-        assert logged_in.patch(f"/api/links/{link_id}", json={"enabled": False}).status_code == 200
-        assert logged_in.get(f"/r/{ending}").status_code == 404
-        assert logged_in.delete(f"/api/links/{link_id}").status_code == 204
-        assert logged_in.get(f"/r/{ending}").status_code == 404
+    redirect = logged_in.get(f"/r/{ending}", follow_redirects=False)
+    assert redirect.status_code == 302
+    assert redirect.headers["location"] == "https://example.com/custom"
+    assert (
+        logged_in.patch(
+            f"/api/links/{link_id}",
+            json={
+                "target_url": "https://example.org/changed",
+            },
+        ).status_code
+        == 200
+    )
+    assert logged_in.get(f"/r/{ending}", follow_redirects=False).headers["location"] == (
+        "https://example.org/changed"
+    )
+    assert logged_in.patch(f"/api/links/{link_id}", json={"enabled": False}).status_code == 200
+    assert logged_in.get(f"/r/{ending}").status_code == 404
+    assert logged_in.delete(f"/api/links/{link_id}").status_code == 204
+    assert logged_in.get(f"/r/{ending}").status_code == 404
 
 
 def test_custom_ending_is_unique_across_users(logged_in):
@@ -305,58 +298,46 @@ def test_code_collision_retries(logged_in):
     assert response.json()["code"] == "BBBBBBBB"
 
 
-def test_redis_and_publisher_failure_do_not_block_redirect(logged_in, link):
-    with (
-        patch.object(cache.cache, "get", side_effect=RedisConnectionError),
-        patch.object(cache.cache, "setex", side_effect=RedisConnectionError),
-        patch("app.links.record_click.apply_async", side_effect=RedisConnectionError),
-    ):
-        response = logged_in.get(f"/r/{link['code']}", follow_redirects=False)
-    assert response.status_code == 302
-
-
-def test_actual_dead_broker_has_short_publish_deadline():
-    from app.tasks import celery
-
-    # An actual refused TCP connection exercises Kombu/Redis retry configuration.
-    start = time.monotonic()
-    with celery.connection_for_write(url="redis://127.0.0.1:1/0") as connection:
-        try:
-            record_click.apply_async(args=["unused"] * 3, connection=connection, retry=False)
-        except Exception:
-            pass
-        else:
-            raise AssertionError("Dead broker unexpectedly accepted a task")
-    assert time.monotonic() - start < 1.5
-
-
-def test_event_and_rollup_idempotency(logged_in, link):
-    event = str(uuid.uuid4())
-    timestamp = datetime.now(UTC).replace(hour=12).isoformat()
-    record_click.run(event, link["id"], timestamp)
-    record_click.run(event, link["id"], timestamp)
-    aggregate_clicks.run()
-    aggregate_clicks.run()
+def test_redirect_records_clicks_immediately(logged_in, link):
+    for _ in range(3):
+        assert logged_in.get(f"/r/{link['code']}", follow_redirects=False).status_code == 302
+    stats = logged_in.get(f"/api/links/{link['id']}/stats").json()
+    assert stats["total_clicks"] == 3
+    assert sum(day["clicks"] for day in stats["days"]) == 3
+    assert logged_in.get("/api/links").json()["total_clicks"] == 3
     with SessionLocal() as db:
-        assert db.scalar(select(func.count()).select_from(ClickEvent)) == 1
-        assert db.scalar(select(DailyLinkStat.clicks)) == 1
-    response = logged_in.get(f"/api/links/{link['id']}/stats").json()
-    assert response["total_clicks"] == 1
-    assert len(response["days"]) == 30
-    assert sum(day["clicks"] for day in response["days"]) == 1
-    assert logged_in.get("/api/links").json()["total_clicks"] == 1
-    assert logged_in.get("/api/links").json()["items"][0]["total_clicks"] == 1
-    logged_in.delete(f"/api/links/{link['id']}")
-    record_click.run(str(uuid.uuid4()), link["id"], timestamp)  # Late delivery after delete.
+        assert db.scalar(select(func.count()).select_from(ClickEvent)) == 3
+
+
+def test_unavailable_links_do_not_count(logged_in, link):
+    logged_in.patch(f"/api/links/{link['id']}", json={"enabled": False})
+    assert logged_in.get(f"/r/{link['code']}").status_code == 404
+    assert logged_in.get("/r/missing-code").status_code == 404
     with SessionLocal() as db:
         assert db.scalar(select(func.count()).select_from(ClickEvent)) == 0
 
 
-def test_utc_rollup(logged_in, link):
-    record_click.run(str(uuid.uuid4()), link["id"], "2026-01-02T00:30:00+07:00")
-    aggregate_clicks.run()
+def test_failed_click_write_returns_503_without_a_false_redirect(logged_in, link):
+    with patch("sqlalchemy.orm.Session.commit", side_effect=OperationalError("", {}, Exception())):
+        response = logged_in.get(f"/r/{link['code']}", follow_redirects=False)
+    assert response.status_code == 503
+    assert "location" not in response.headers
     with SessionLocal() as db:
-        assert str(db.scalar(select(DailyLinkStat.day))) == "2026-01-01"
+        assert db.scalar(select(func.count()).select_from(ClickEvent)) == 0
+
+
+def test_daily_statistics_use_utc(logged_in, link):
+    from datetime import timezone
+
+    local_time = datetime.now(UTC).replace(
+        hour=0, minute=30, second=0, microsecond=0, tzinfo=timezone(timedelta(hours=7))
+    )
+    utc_day = local_time.astimezone(UTC).date().isoformat()
+    with SessionLocal.begin() as db:
+        db.add(ClickEvent(id=uuid.uuid4(), link_id=uuid.UUID(link["id"]), clicked_at=local_time))
+    result = logged_in.get(f"/api/links/{link['id']}/stats").json()
+    assert result["total_clicks"] == 1
+    assert next(day["clicks"] for day in result["days"] if day["day"] == utc_day) == 1
 
 
 def test_liveness_readiness_and_recovery(client):

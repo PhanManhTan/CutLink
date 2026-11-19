@@ -18,7 +18,7 @@
 2. CD loads the image, tags it with the CI commit SHA, and pushes it to GHCR. There is no second build.
 3. CD checks anonymous pull access. Make the GHCR package public for this demo.
 4. New application and migration task revisions use the same image digest.
-5. The old task stops completely, including Beat. A separate private Fargate task runs migration.
+5. The old API task stops completely. A separate private Fargate task runs migration.
 6. Only exit code `0` permits application startup. CD waits for ECS stability and ALB readiness.
 7. CD uploads frontend assets, then index.html, and invalidates the CloudFront index.
 
@@ -60,4 +60,8 @@ Without production variables, CD fails before assuming an AWS role. Feature CI n
 
 The backend image and frontend are built once, tested, and promoted unchanged. CD updates task revisions and the existing service; it does not rebuild or redeploy CloudFormation/RDS/VPC. Image pull, startup, migration and health checks still determine duration.
 
-This single-task demo accepts downtime to keep one Beat running. Health grace is tolerance for startup errors, not a mandatory delay before healthy traffic. See [ECS service updates](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/update-service-parameters.html).
+This single-task demo accepts downtime during migration and replacement. Health grace is tolerance for startup errors, not a mandatory delay before healthy traffic. See [ECS service updates](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/update-service-parameters.html).
+
+## Cache cleanup
+
+After a PR is merged into main, cache-cleanup.yml removes caches from merged PRs and their completed branches. Main caches and reused branches with newer commits are kept. The workflow runs trusted default-branch code without checking out PR code, and can also be run manually. It does not delete build artifacts or application data.

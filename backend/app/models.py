@@ -1,7 +1,7 @@
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -34,12 +34,3 @@ class ClickEvent(Base):
     link_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("links.id", ondelete="CASCADE"))
     clicked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     __table_args__ = (Index("ix_click_events_link_time", "link_id", "clicked_at"),)
-
-
-class DailyLinkStat(Base):
-    __tablename__ = "daily_link_stats"
-    link_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("links.id", ondelete="CASCADE"), primary_key=True
-    )
-    day: Mapped[date] = mapped_column(Date, primary_key=True)
-    clicks: Mapped[int] = mapped_column(BigInteger)

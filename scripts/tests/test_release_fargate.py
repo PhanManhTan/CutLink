@@ -149,6 +149,10 @@ class ReleaseTests(unittest.TestCase):
             for args, payload in calls
             if args[:2] == ("ecs", "register-task-definition")
         ]
+        self.assertEqual(
+            [item["name"] for item in registrations[0]["containerDefinitions"]], ["api"]
+        )
+        self.assertEqual(registrations[0]["memory"], "512")
         for definition in registrations:
             self.assertNotIn("taskDefinitionArn", definition)
             for container in definition["containerDefinitions"]:

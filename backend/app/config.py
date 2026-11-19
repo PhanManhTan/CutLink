@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     db_name: str = "cutlink"
     db_user: str = "cutlink"
     db_password: SecretStr = SecretStr("cutlink-local-only")
-    redis_url: str = "redis://localhost:6379/0"
     jwt_secret: str = Field(min_length=32)
     cookie_secure: bool = True
     allowed_origins: list[str] = ["http://localhost:5173"]

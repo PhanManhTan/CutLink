@@ -4,7 +4,7 @@
 
 Shorten URLs, choose custom endings, manage links, and track clicks.
 
-React + Vite + TypeScript + Bootstrap · FastAPI + PostgreSQL + Alembic · Redis + Celery
+React + Vite + TypeScript + Bootstrap · FastAPI + PostgreSQL + Alembic
 
 ## Run locally
 
@@ -15,7 +15,7 @@ docker compose up -d --build --wait --wait-timeout 180
 
 Open [localhost:5173](http://localhost:5173). Migrations run before the API starts.
 
-Choose `/r/my-portfolio`, or leave the ending blank for a random code. Invalid URLs and duplicate endings show inline errors.
+Choose `/r/my-portfolio`, or leave the ending blank for a random code. The backend records each click directly in PostgreSQL before redirecting. Invalid URLs and duplicate endings show inline errors.
 
 ## Check
 
@@ -43,6 +43,7 @@ CI and CD are separate workflows. CD accepts only successful CI for the current 
 ## Guides
 
 - [Local development and tests](docs/local.md)
+- [PostgreSQL and migrations](docs/database.md)
 - [AWS setup, rollback and teardown](docs/aws.md)
 - [GitHub Actions and production variables](docs/github-actions.md)
 - [Architecture and limits](docs/architecture.md)

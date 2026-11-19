@@ -74,7 +74,7 @@ try {
             if ($oldService.services[0].runningCount -gt 0 -or -not (Test-Path -LiteralPath $previousFile)) {
                 $previous | ConvertTo-Json | Set-Content $previousFile
             }
-            # Stop the old service BEFORE switching task definitions; also stops the old Beat.
+            # Stop the old service before switching task definitions.
             Invoke-Native aws @('ecs', 'update-service', '--cluster', $base.ClusterArn,
                 '--service', $old.ServiceName, '--desired-count', '0')
             Wait-ServiceStopped $base.ClusterArn $old.ServiceName

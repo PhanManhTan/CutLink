@@ -99,8 +99,18 @@ def release(base_stack, app_stack, image, state_path):
     migration = aws(
         "ecs", "describe-task-definition", "--task-definition", app["MigrationTaskArn"]
     )["taskDefinition"]
-    app_definition = definition_with_image(old, {"api", "worker", "beat"}, image)
+    app_definition = definition_with_image(old, {"api"}, image)
+    app_definition["containerDefinitions"] = [
+        item for item in app_definition["containerDefinitions"] if item["name"] == "api"
+    ]
+    api = app_definition["containerDefinitions"][0]
+    api["environment"] = [
+        item for item in api.get("environment", []) if item["name"] != "REDIS_URL"
+    ]
+    api.pop("dependsOn", None)
+    app_definition["memory"] = "512"
     migration_definition = definition_with_image(migration, {"migration"}, image)
+    migration_definition["memory"] = "512"
     state = {
         "baseStack": base_stack,
         "appStack": app_stack,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import type { ReactNode } from "react";
 import {
   Activity,
@@ -6,22 +6,21 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Copy,
-  ExternalLink,
   Link2,
   LogOut,
-  Pencil,
   Plus,
   Search,
-  Trash2,
+  RefreshCw,
 } from "lucide-react";
 import Brand from "./components/Brand";
 import Modal from "./components/Modal";
 import LinkForm from "./components/LinkForm";
 import StatsDialog from "./components/StatsDialog";
-import { api, ApiError, shortUrl } from "./api";
-import type { Link, LinkPage, User } from "./api";
+import { api } from "./api";
+import type { Link, User } from "./api";
 import { errorMessage, number } from "./utils";
+import { useLinks } from "./useLinks";
+import LinkTable from "./components/LinkTable";
 
 export default function Dashboard({
   user,
@@ -30,76 +29,27 @@ export default function Dashboard({
   user: User;
   loggedOut: () => void;
 }) {
-  const [page, setPage] = useState<LinkPage | null>(null);
-  const [offset, setOffset] = useState(0);
+  const {
+    page,
+    offset,
+    setOffset,
+    error,
+    setError,
+    notice,
+    setNotice,
+    busy,
+    refresh,
+    copy,
+    toggle,
+    remove,
+  } = useLinks(loggedOut);
   const [query, setQuery] = useState("");
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [editor, setEditor] = useState<Link | "new" | null>(null);
   const [stats, setStats] = useState<Link | null>(null);
   const [deleting, setDeleting] = useState<Link | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
   const closeEditor = useCallback(() => setEditor(null), []);
   const closeStats = useCallback(() => setStats(null), []);
   const closeDelete = useCallback(() => setDeleting(null), []);
-  const refresh = useCallback(async () => {
-    try {
-      setPage(await api<LinkPage>(`/links?limit=20&offset=${offset}`));
-      setError("");
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 401) loggedOut();
-      else setError(errorMessage(e));
-    }
-  }, [offset, loggedOut]);
-  useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(refresh, 15000);
-    return () => clearInterval(timer);
-  }, [refresh]);
-  useEffect(() => {
-    if (!notice) return;
-    const timer = setTimeout(() => setNotice(""), 3500);
-    return () => clearTimeout(timer);
-  }, [notice]);
-  useEffect(() => {
-    if (page && offset > 0 && page.items.length === 0)
-      setOffset(Math.max(0, offset - 20));
-  }, [page, offset]);
-  async function copy(link: Link) {
-    try {
-      await navigator.clipboard.writeText(shortUrl(link.code));
-      setNotice("Link copied. Ready to share!");
-    } catch {
-      setError(
-        `Could not copy automatically. Your link: ${shortUrl(link.code)}`,
-      );
-    }
-  }
-  async function toggle(link: Link) {
-    setBusy(link.id);
-    try {
-      await api(`/links/${link.id}`, "PATCH", { enabled: !link.enabled });
-      await refresh();
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(null);
-    }
-  }
-  async function remove() {
-    if (!deleting) return;
-    setBusy(deleting.id);
-    try {
-      await api(`/links/${deleting.id}`, "DELETE");
-      setDeleting(null);
-      setNotice("Link deleted.");
-      await refresh();
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(null);
-    }
-  }
   async function logout() {
     try {
       await api("/auth/logout", "POST");
@@ -164,8 +114,8 @@ export default function Dashboard({
                 Cut the long link<span>.</span>
               </h1>
               <p>
-                Create short links, choose custom endings, and track click activity
-                in one place.
+                Create short links, choose custom endings, and track click
+                activity in one place.
               </p>
             </div>
             <button
@@ -225,109 +175,25 @@ export default function Dashboard({
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search this page…"
                 />
+                <button
+                  className="icon-btn"
+                  aria-label="Refresh links"
+                  title="Refresh links"
+                  onClick={() => void refresh()}
+                >
+                  <RefreshCw size={18} />
+                </button>
               </div>
             </div>
-            <div className="table-responsive">
-              <table className="links-table">
-                <thead>
-                  <tr>
-                    <th>NAME / DESTINATION</th>
-                    <th>SHORT LINK</th>
-                    <th>CLICKS</th>
-                    <th>STATUS</th>
-                    <th>
-                      <span className="visually-hidden">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((link) => (
-                    <tr key={link.id}>
-                      <td className="destination-cell">
-                        <div className="link-info">
-                          <span className="link-tile">
-                            <Link2 size={22} />
-                          </span>
-                          <div>
-                            <strong>{link.name}</strong>
-                            <a
-                              className="target-url"
-                              href={link.target_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title={link.target_url}
-                            >
-                              {link.target_url}
-                            </a>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="short-cell">
-                        <div className="short-link">
-                          <a
-                            href={`/r/${link.code}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            /r/{link.code}
-                            <ExternalLink size={13} />
-                          </a>
-                          <button
-                            className="icon-btn"
-                            onClick={() => void copy(link)}
-                            aria-label={`Copy ${link.name}`}
-                          >
-                            <Copy size={16} />
-                          </button>
-                        </div>
-                      </td>
-                      <td className="clicks-cell" data-label="Clicks">
-                        <button
-                          className="click-count"
-                          onClick={() => setStats(link)}
-                          aria-label={`Stats for ${link.name}`}
-                        >
-                          <BarChart3 size={15} />
-                          {number.format(link.total_clicks)}
-                        </button>
-                      </td>
-                      <td className="status-cell">
-                        <button
-                          className={`status-badge ${link.enabled ? "enabled" : "disabled"}`}
-                          disabled={busy === link.id}
-                          onClick={() => void toggle(link)}
-                          title="Click to enable or disable"
-                          aria-label={`${link.enabled ? "Disable" : "Enable"} ${link.name}`}
-                        >
-                          <span />
-                          {link.enabled ? "Active" : "Paused"}
-                        </button>
-                      </td>
-                      <td className="actions-cell">
-                        <div className="row-actions">
-                          <button
-                            className="icon-btn"
-                            onClick={() => setEditor(link)}
-                            aria-label={`Edit ${link.name}`}
-                          >
-                            <Pencil size={16} />
-                            <span className="action-label">Edit</span>
-                          </button>
-                          <button
-                            className="icon-btn delete-btn"
-                            onClick={() => setDeleting(link)}
-                            aria-label={`Delete ${link.name}`}
-                          >
-                            <Trash2 size={16} />
-                            <span className="action-label">Delete</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <LinkTable
+              links={filtered}
+              busy={busy}
+              onCopy={copy}
+              onToggle={toggle}
+              onStats={setStats}
+              onEdit={setEditor}
+              onDelete={setDeleting}
+            />
             {!page && !error && (
               <div className="empty-state" role="status">
                 Loading your links…
@@ -429,7 +295,9 @@ export default function Dashboard({
             <button
               className="btn btn-danger"
               disabled={busy === deleting.id}
-              onClick={() => void remove()}
+              onClick={async () => {
+                if (deleting && (await remove(deleting))) setDeleting(null);
+              }}
             >
               {busy ? "Deleting…" : "Delete link"}
             </button>

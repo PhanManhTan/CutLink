@@ -34,15 +34,8 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U cutlink -d cutlink_test"
           --health-interval 5s --health-timeout 3s --health-retries 12
-      redis:
-        image: redis:7-alpine
-        ports: ['6379:6379']
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s --health-timeout 2s --health-retries 10
     env:
       TEST_DATABASE_URL: postgresql+psycopg://cutlink:cutlink-local-only@localhost:5432/cutlink_test
-      REDIS_URL: redis://localhost:6379/0
       JWT_SECRET: ci-test-secret-only-never-use-in-production-12345
       COOKIE_SECURE: 'false'
       ALLOWED_ORIGINS: '["http://testserver"]'
@@ -144,9 +137,7 @@ jobs:
       - name: HTTP smoke checks via frontend origin
         shell: pwsh
         run: ./scripts/smoke.ps1 -BaseUrl http://localhost:5173
-      - name: Verify real worker and Beat process a click
-        run: python scripts/check_background.py --base-url http://localhost:5173
-      - name: Verify Redis and PostgreSQL outages and recovery
+      - name: Verify PostgreSQL outage and recovery
         run: python scripts/check_outages.py --base-url http://localhost:5173
       - name: Export the tested backend image for CD
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

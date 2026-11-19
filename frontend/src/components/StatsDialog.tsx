@@ -15,15 +15,22 @@ export default function StatsDialog({
   const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
-    api<Stats>(`/links/${link.id}/stats`)
-      .then((data) => {
-        if (active) setStats(data);
-      })
-      .catch((e) => {
-        if (active) setError(errorMessage(e));
-      });
+    const load = () =>
+      api<Stats>(`/links/${link.id}/stats`)
+        .then((data) => {
+          if (active) {
+            setStats(data);
+            setError("");
+          }
+        })
+        .catch((e) => {
+          if (active) setError(errorMessage(e));
+        });
+    void load();
+    window.addEventListener("focus", load);
     return () => {
       active = false;
+      window.removeEventListener("focus", load);
     };
   }, [link.id]);
   const max = Math.max(1, ...(stats?.days.map((day) => day.clicks) || []));
@@ -68,8 +75,8 @@ export default function StatsDialog({
             <span>{stats.days[29].day}</span>
           </div>
           <p className="field-note">
-            Daily data refreshes every minute. Total clicks include processed
-            events.
+            Clicks are recorded by the backend before redirecting. Dates use
+            UTC.
           </p>
           <details>
             <summary>View daily data</summary>

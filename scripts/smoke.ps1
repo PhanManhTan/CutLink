@@ -53,11 +53,15 @@ try {
     $redirect = Request "/r/$($link.code)"
     Assert-Status $redirect 302 'Redirect'
     Assert-Uncached $redirect
+    $stats = (Request "/api/links/$linkId/stats").Content | ConvertFrom-Json
+    if ($stats.total_clicks -ne 1 -or ($stats.days | Measure-Object clicks -Sum).Sum -ne 1) {
+        throw 'Click statistics were not committed before redirect'
+    }
     if (($redirect.Headers.Location -join '') -ne 'https://example.com/?cutlink=smoke') { throw 'Wrong redirect destination' }
     Assert-Status (Request "/api/links/$linkId" 'PATCH' @{target_url = 'https://example.org/updated'}) 200 'Update'
     $updated = Request "/r/$($link.code)"
     Assert-Status $updated 302 'Updated redirect'
-    if (($updated.Headers.Location -join '') -ne 'https://example.org/updated') { throw 'Stale redirect cache' }
+    if (($updated.Headers.Location -join '') -ne 'https://example.org/updated') { throw 'Wrong updated redirect destination' }
     Assert-Status (Request "/api/links/$linkId" 'PATCH' @{enabled = $false}) 200 'Pause'
     Assert-Status (Request "/r/$($link.code)") 404 'Paused redirect'
     Assert-Status (Request "/api/links/$linkId/stats") 200 'Statistics'

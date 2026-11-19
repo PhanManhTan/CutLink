@@ -96,7 +96,7 @@ Resources:
   TaskSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Only ALB reaches the API; Redis stays inside the task
+      GroupDescription: Only ALB reaches the API
       VpcId: !Ref Vpc
       SecurityGroupIngress:
         - {IpProtocol: tcp, FromPort: 8000, ToPort: 8000, SourceSecurityGroupId: !Ref AlbSecurityGroup}

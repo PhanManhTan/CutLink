@@ -1,0 +1,146 @@
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.auth-story {
+  background: #192e22;
+  color: #fff;
+  padding: 45px 9%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  position: relative;
+  overflow: hidden;
+}
+.auth-story:after {
+  content: "";
+  width: 500px;
+  height: 500px;
+  border: 1px solid #ffffff08;
+  border-radius: 50%;
+  position: absolute;
+  right: -200px;
+  bottom: -180px;
+  box-shadow:
+    0 0 0 60px #ffffff03,
+    0 0 0 120px #ffffff02;
+  pointer-events: none;
+}
+.auth-story .brand {
+  color: #fff;
+}
+.auth-story .brand-icon {
+  background: #c4ef86;
+  color: #192e22;
+}
+.auth-story .eyebrow {
+  color: #9cba83;
+  font-size: 0.65rem;
+}
+.auth-story h1 {
+  font-size: clamp(2.1rem, 3.5vw, 3.7rem);
+  line-height: 1.4;
+  font-weight: 550;
+  letter-spacing: -2px;
+  margin: 22px 0;
+}
+.auth-story h1 > span {
+  color: var(--lime);
+}
+.auth-story p {
+  font-size: 0.85rem;
+  line-height: 2;
+  color: #a5b4a6;
+}
+.auth-link {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: #ffffff08;
+  border: 1px solid #ffffff15;
+  border-radius: 12px;
+  padding: 20px 18px;
+  font-size: 0.8rem;
+  margin-top: 35px;
+  max-width: 390px;
+  color: #9db68b;
+}
+.auth-link > span {
+  flex: 1;
+}
+.auth-link strong {
+  color: #e0e8d8;
+  font-weight: 450;
+}
+.auth-story > small {
+  color: #81937f;
+}
+.auth-form-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f9fbf7;
+  padding: 45px;
+}
+.auth-form {
+  max-width: 385px;
+  width: 100%;
+}
+.auth-form h2 {
+  font-size: 1.8rem;
+  font-weight: 650;
+  letter-spacing: -1px;
+  margin: 14px 0;
+}
+.auth-form > p {
+  font-size: 0.82rem;
+  color: #88927f;
+  line-height: 1.8;
+  margin-bottom: 30px;
+}
+.auth-submit {
+  margin-top: 28px;
+  padding: 14px;
+}
+.auth-switch {
+  text-align: center;
+  font-size: 0.8rem;
+  color: #929b89;
+  margin-top: 23px;
+}
+.auth-switch button {
+  border: 0;
+  background: transparent;
+  font-weight: 600;
+  color: #416239;
+  padding: 4px;
+}
+.auth-form .auth-footnote {
+  border-top: 1px solid #e5ebdf;
+  padding-top: 23px;
+  margin: 34px 0 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+}
+.boot-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 26px;
+  color: #8a987f;
+  background: #f7f9f4;
+}
+.alert {
+  font-size: 0.82rem;
+  line-height: 1.8;
+}
+.btn-light {
+  background: #f0f3ed;
+  border-color: #e8eee2;
+  color: #6b7e5d;
+}
